@@ -1,38 +1,35 @@
-import requests
-from bs4 import BeautifulSoup #
-import html
-from datetime import datetime,timedelta
-import unicodedata
-from unidecode import unidecode
-#import firebase_admin
-#from firebase_admin import credentials, firestore
+import copy
+import asyncio
 import sys
 import time
 import re
 import urllib.parse
+import html
+import unicodedata
+import json
+#import operator
+import decimal
+#import pdb
+
+from datetime import datetime,timedelta
+
+import urllib3
+import requests
+import telegram
+import boto3
+
+from bs4 import BeautifulSoup #
+from unidecode import unidecode
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.common.desired_capabilities import DesiredCapabilities
-#from googletrans import Translator
-
-import telegram
-import asyncio
- # import pycountry
-import json
-import operator
-#from google.cloud.firestore_v1 import Query
+#from selenium.webdriver.common.desired_capabilities import DesiredCapabilities
 from fuzzywuzzy import fuzz
-import boto3
-from boto3.dynamodb.conditions import Key, Attr
-import decimal
-import pdb
-#Desactivar advertencias HTTP
-import urllib3
+from boto3.dynamodb.conditions import Key
+
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-import copy
 
 
 while True:
@@ -49,13 +46,22 @@ while True:
     v_list_eventos_olds = []   # Lista para almacenar la lista de viejos
     eventos_existentes = {}
 
+    token_tg = "6559813109:AAEUKzEG6rRIFrt2pwkcHhZuA9Ynt3kqvlI"
+    bot_tg_canal = telegram.Bot(token=token_tg)
+
     # Configura tus credenciales
     aws_access_key_id = 'AKIATCKAQMEJNSIO64FE'
     aws_secret_access_key = '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'
     region = 'us-east-1'
 
     # Inicializa DynamoDB
-    dynamodb = boto3.resource('dynamodb', region_name=region, aws_access_key_id=aws_access_key_id, aws_secret_access_key=aws_secret_access_key)
+    dynamodb = boto3.resource(
+        'dynamodb',
+        region_name=region,
+        aws_access_key_id=aws_access_key_id,
+        aws_secret_access_key=aws_secret_access_key
+    )
+
 
     # Selecciona la tabla
     t_dia_evento = dynamodb.Table('dia_evento')
@@ -73,7 +79,7 @@ while True:
                 print('No se encontro la fecha en la BD')
                 return '20000101'
         except Exception as e:
-            #print(f'Error al consultar la tabla dia_evento: {e}')
+            print(f'Error al consultar la tabla dia_evento: {e}')
             return '20000101'
 
     #Eliminar registros de las tablas
@@ -89,15 +95,15 @@ while True:
                 for item in items:
                     # No elimina los items donde f02_proveedor contenga "Bases" en la tabla de eventos
                     if self.table.name == 'eventos' and "Bases" in item.get('f02_proveedor', ''):
-                        continue  # Salta al siguiente item sin eliminar este                    
-                    elif self.table.name == 'eventos':
+                        continue  # Salta al siguiente item sin eliminar este
+                    if self.table.name == 'eventos':
                         key = {'f01_id_document': item['f01_id_document'], 'f02_proveedor': item['f02_proveedor']}
                     elif self.table.name == 'dealers':
                         key = {'f01_id_dealer': item['f01_id_dealer'], 'f02_dealer_name': item['f02_dealer_name']}
                     else:
                         key = item  # Si la tabla no tiene clave compuesta, usa el item completo
                     self.table.delete_item(Key=key)
-                #print(f'Se eliminaron los datos de la tabla {self.table.name}')
+                print(f'Se eliminaron los datos de la tabla {self.table.name}')
             except Exception as e:
                 print(f'Error al eliminar los datos de tabla: {self.table.name} {e}')
 
@@ -114,7 +120,7 @@ while True:
         actualizar_bases = 1
         eventos_table.delete_all_items()
         dealers_table.delete_all_items()
-        dia_evento_table.delete_all_items()        
+        dia_evento_table.delete_all_items()
 
     if not vListDealers:  # Verifica si vListDealers está vacía
         response_DB_Dealers = t_dealers.scan()  # O el nombre correcto de tu variable de base de datos para dealers
@@ -138,6 +144,7 @@ while True:
         eventos_para_procesar = v_list_eventos_3
 
     contador_registros = 0
+    chat_id_channel = -1002035964627
 
     activaLiveTV = 0
     activaSportline = 0
@@ -177,11 +184,11 @@ while True:
             # vListDealers.append(item)
         for item in dealers_para_procesar:
             proveedor = item.get('f02_dealer_name', '')
-            estado = item.get('f03_state', '')            
+            estado = item.get('f03_state', '')
             if proveedor == 'LiveTV':
                 if not estado:
                     activaLiveTV = 1
-                    #ind_miss_LiveTV = 1  
+                    #ind_miss_LiveTV = 1
                     #print(f'Se activa variable activaLiveTV por estado: {estado} en LiveTV')
             elif proveedor == 'Sportline':
                 if not estado:
@@ -209,7 +216,7 @@ while True:
                     activaPlatin = 1
                     #print(f'Se activa variable activaPlatin por estado: {estado}')
             elif proveedor == 'DLHD':
-                if not estado:                
+                if not estado:
                     activaDaddyLivehd = 1
                     #print(f'Se activa variable activaDaddyLivehd por estado: {estado}')
 
@@ -220,29 +227,29 @@ while True:
 
     def convertToWhateverOriginUrl(url):
         # Usar la URL de Whatever Origin con la URL de destino codificada
-        whatever_origin_url = f'http://www.whateverorigin.org/get?url={url}&callback=?'
+        whatever_origin_url = f'https://www.whateverorigin.org/get?url={url}&callback=?'
         return whatever_origin_url
 
     def validate_and_get_url(url):
         try:
             headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36'}
-            fullallorigins_url = 'https://api.allorigins.win/raw?url=' + url        
+            fullallorigins_url = 'https://api.allorigins.win/raw?url=' + url
             #response_all = requests.get(fullallorigins_url, headers=headers)
             response_all = requests.get(fullallorigins_url, headers=headers, allow_redirects=True, verify=False)
             if response_all.status_code in (521, 502, 503, 403, 404, 204):
-                #print(f"Error {response_all.status_code} para allorigins {fullallorigins_url}")            
+                #print(f"Error {response_all.status_code} para allorigins {fullallorigins_url}")
                 fullallorigins_url_iso = 'https://api.allorigins.win/get?charset=ISO-8859-1&url='+ url
                 #response_all_iso = requests.get(fullallorigins_url_iso, headers=headers)
                 response_all_iso = requests.get(fullallorigins_url_iso, headers=headers, allow_redirects=True, verify=False)
                 if response_all_iso.status_code in (521, 502, 503, 403, 404, 204):
-                    #print(f"Error {response_all_iso.status_code} para allorigins {fullallorigins_url_iso}")            
+                    #print(f"Error {response_all_iso.status_code} para allorigins {fullallorigins_url_iso}")
                     fullallorigins_url_myFunc = 'https://api.allorigins.win/get?callback=myFunc&url='+ url
                     #response_all_myFunc = requests.get(fullallorigins_url_myFunc, headers=headers)
                     response_all_myFunc = requests.get(fullallorigins_url_myFunc, headers=headers, allow_redirects=True, verify=False)
-                    if response_all_myFunc.status_code in (521, 502, 503, 403, 404, 204):                
-                        #print(f"Error {response_all_myFunc.status_code} para allorigins {fullallorigins_url_myFunc}")            
+                    if response_all_myFunc.status_code in (521, 502, 503, 403, 404, 204):
+                        #print(f"Error {response_all_myFunc.status_code} para allorigins {fullallorigins_url_myFunc}")
                         fullCors_url = convertToCorsProxyUrl(url)
-                        #response_cors = requests.get(fullCors_url, headers=headers)            
+                        #response_cors = requests.get(fullCors_url, headers=headers)
                         response_cors = requests.get(fullCors_url, headers=headers, allow_redirects=True, verify=False)
                         if response_cors.status_code in (521, 502, 503, 403, 404, 204):
                             #print(f"Error {response_cors.status_code} para corsproxy {fullCors_url}")
@@ -257,10 +264,10 @@ while True:
                             return fullCors_url
                     else:
                         #print(f"retorna bien para fullallorigins_url_myFunc {fullallorigins_url_myFunc}")
-                        return fullallorigins_url_myFunc                            
+                        return fullallorigins_url_myFunc
                 else:
                     #print(f"retorna bien para fullallorigins_url_iso {fullallorigins_url_iso}")
-                    return fullallorigins_url_iso                            
+                    return fullallorigins_url_iso
             else:
                 #print(f"retorna bien para full_url {fullallorigins_url}")
                 return fullallorigins_url
@@ -279,16 +286,16 @@ while True:
     urlDaddyLivehd =  validate_and_get_url ('https://dlhd.sx/schedule/schedule-generated.json')
     urlBases =  validate_and_get_url ('https://livetv.sx/enx/allupcomingsports/')
 
-    # Variables para el evento maximo
+     # Variables para el evento maximo
     max_evento1 = None
     max_f01_id_document1 = 0  # Inicializa con un valor bajo o adecuado
     max_evento = None
     max_eventoLiveTV = None
-    # Almacena los f01_id_document de los eventos que contienen 'LiveTV'
+     # Almacena los f01_id_document de los eventos que contienen 'LiveTV'
     f01_id_document_list = []
 
-    # Ahora, eventos_para_procesar contiene la lista de eventos a procesar, ya sea de response_DB_Eventos o de v_list_eventos_3
-    if eventos_para_procesar:    
+     # Ahora, eventos_para_procesar contiene la lista de eventos a procesar, ya sea de response_DB_Eventos o de v_list_eventos_3
+    if eventos_para_procesar:
         # Iterar sobre los documentos y agregarlos a v_list_eventos_en_BD
         for evento_db in eventos_para_procesar:
             evento_data = evento_db
@@ -297,20 +304,20 @@ while True:
             f02_proveedor = evento_data.get('f02_proveedor', '')
             if (("LibreF" in f02_proveedor and ind_miss_LibreF == 1) or
                 ("LiveTV" in f02_proveedor and activaLiveTV == 1)):
-                
+
                 detalles_evento = evento_data.get('f20_Detalles_Evento', [])
                 # Verificar si hay al menos un detalle que contiene 'sin_data' en 'f22_opcion_Watch'
                 if any('sin_data' in detalle.get('f22_opcion_Watch', '') for detalle in detalles_evento if detalle.get('f22_opcion_Watch') is not None):
                     v_list_eventos.append(evento_data)
                     ind_miss_LibreF = 1
                     #activaLibreF = 0
-                                
+
                 # Si el evento contiene 'LiveTV', guarda su f01_id_document en la listas
                 if 'LiveTV' in evento_data['f02_proveedor']:
                     activaLiveTV = 1
                     f01_id_document_list.append(evento_data['f01_id_document'])
                     v_list_eventos_LiveTV.append(evento_data)
-                    
+
             # Si el evento contiene 'LiveTV', guarda su f01_id_document en la lista
             if 'Bases' in evento_data['f02_proveedor']:
                 v_list_eventos_Bases.append(evento_data)
@@ -321,32 +328,32 @@ while True:
                 ("RojaTv" in f02_proveedor and activaRojaTv == 1) or
                 ("Platin" in f02_proveedor and activaPlatin == 1) or
                 ("DLHD" in f02_proveedor and activaDaddyLivehd == 1)):
-                    v_list_eventos.append(evento_data)
+                v_list_eventos.append(evento_data)
             else:
                 # Saltar al siguiente registro del bucle 'for'
-                continue                
-                
+                continue
+
         # Encuentra el maximo f01_id_document entre los eventos 'LiveTV'
         if f01_id_document_list:
             max_f01_id_document1 = max(f01_id_document_list)
             #max_eventoLiveTV = next((evento for evento in response_DB_Eventos['Items'] if evento['f01_id_document'] == max_f01_id_document1 and 'LiveTV' in evento['f02_proveedor']), None)
             max_eventoLiveTV = next((evento for evento in eventos_para_procesar if evento['f01_id_document'] == max_f01_id_document1 and 'LiveTV' in evento['f02_proveedor']), None)
-            
+
         # Si encontramos el evento maximo, agregarlo a v_list_eventos
         if max_eventoLiveTV:
-            v_list_eventos.append(max_eventoLiveTV)     
-            
+            v_list_eventos.append(max_eventoLiveTV)
+
         # Obtener todos los f01_id_document de eventos_db
         #f01_id_document_list = [evento_db['f01_id_document'] for evento_db in response_DB_Eventos['Items']]
         f01_id_document_list = [evento_db['f01_id_document'] for evento_db in eventos_para_procesar]
-        
+
         # Encontrar el maximo f01_id_document
         if f01_id_document_list:
             contador_registros = max(f01_id_document_list)
             #print(f"El f01_id_document mas alto es: {contador_registros}")
         else:
-            print("No hay registros en eventos_db")    
-            
+            print("No hay registros en eventos_db")
+
     # Copiar el contenido de v_list_eventos a v_list_eventos_copia
     #v_list_eventos_copia.extend(v_list_eventos)
     v_list_eventos_copia = copy.deepcopy(v_list_eventos)
@@ -359,63 +366,63 @@ while True:
         global activaRojaOn
         global activaRojaTv
         global activaPlatin
-        global activaDaddyLivehd    
+        global activaDaddyLivehd
         global ind_miss_LibreF
-                
+
         for evento in v_list_eventos_3:
-                proveedor = evento.get('f02_proveedor', '')
-                if 'Sportline' in proveedor:
-                    break
+            proveedor = evento.get('f02_proveedor', '')
+            if 'Sportline' in proveedor:
+                break
         else:
             activaSportline = 1
             #print(f'Se activa variable activaSportline porque NO existe algun registro de Sportline')
         for evento in v_list_eventos_3:
-                proveedor = evento.get('f02_proveedor', '')
-                if 'DirectatvHDme' in proveedor:
-                    break
+            proveedor = evento.get('f02_proveedor', '')
+            if 'DirectatvHDme' in proveedor:
+                break
         else:
             activaDirectatvHDme = 1
             #print(f'Se activa variable activaDirectatvHDme porque NO existe algun registro de DirectatvHDme')
         for evento in v_list_eventos_3:
-                proveedor = evento.get('f02_proveedor', '')
-                if 'RojaOn' in proveedor:
-                    break
+            proveedor = evento.get('f02_proveedor', '')
+            if 'RojaOn' in proveedor:
+                break
         else:
             activaRojaOn = 1
             #print(f'Se activa variable activaRojaOn porque NO existe algun registro de RojaOn')
         for evento in v_list_eventos_3:
-                proveedor = evento.get('f02_proveedor', '')
-                if 'RojaTv' in proveedor:
-                    break
+            proveedor = evento.get('f02_proveedor', '')
+            if 'RojaTv' in proveedor:
+                break
         else:
             activaRojaTv = 1
             #print(f'Se activa variable activaRojaTv porque NO existe algun registro de RojaTv')
         for evento in v_list_eventos_3:
-                proveedor = evento.get('f02_proveedor', '')
-                if 'Platin' in proveedor:
-                    break
+            proveedor = evento.get('f02_proveedor', '')
+            if 'Platin' in proveedor:
+                break
         else:
             activaPlatin = 1
             #print(f'Se activa variable activaPlatin porque NO existe algun registro de Platin')
         for evento in v_list_eventos_3:
-                proveedor = evento.get('f02_proveedor', '')
-                if 'DLHD' in proveedor:
-                    break
+            proveedor = evento.get('f02_proveedor', '')
+            if 'DLHD' in proveedor:
+                break
         else:
             activaDaddyLivehd = 1
             #print(f'Se activa variable activaDaddyLivehd porque NO existe algun registro de DLHD')
         for evento in v_list_eventos_3:
-                proveedor = evento.get('f02_proveedor', '')
-                if 'LibreF' in proveedor:
-                    break
+            proveedor = evento.get('f02_proveedor', '')
+            if 'LibreF' in proveedor:
+                break
         else:
             activaLibreF = 1
             ind_miss_LibreF = 0
             #print(f'Se activa variable activaLibreF = 1 porque NO existe algun registro de LibreF')
         for evento in v_list_eventos_3:
-                proveedor = evento.get('f02_proveedor', '')
-                if 'LiveTV' in proveedor:
-                    break
+            proveedor = evento.get('f02_proveedor', '')
+            if 'LiveTV' in proveedor:
+                break
         else:
             activaLiveTV = 1
             #print(f'Se activa variable activaLiveTV = 1 porque NO existe algun registro de LiveTV')
@@ -425,7 +432,7 @@ while True:
     # Funcion para calcular la similitud entre textos normalizados
     def similar(a, b):
         return fuzz.ratio(a.lower(), b.lower())
-                        
+
     # Diccionario de caracteres especiales y sus reemplazos
 
     special_characters = {
@@ -546,7 +553,7 @@ while True:
                 #print(f'processed_text : {processed_text}')
             else:
                 processed_text += char
-        return processed_text  
+        return processed_text
 
     def capitalize_words(text):
         words = text.lower().split()
@@ -594,7 +601,7 @@ while True:
             max_retries = 5
             retries = 0
             while retries < max_retries:
-                
+
                 # Realiza una solicitud GET a la URL inicial para obtener el contenido HTML
                 #response = requests.get(url_inicial)
                 response = requests.get(url_inicial, headers=headers, allow_redirects=True, verify=False)
@@ -604,90 +611,77 @@ while True:
                     # Encuentra el elemento 'iframe'
                     iframe_element = soup.find('iframe')
                     title_element = soup.find('title')
-                    
-                    if iframe_element:            
+
+                    if iframe_element:
                         # Obtiene la URL final del atributo 'src' del elemento 'iframe'
                         url_final = iframe_element['src']
                         url_final = url_final.replace('https://tvhd.tutvlive.site/stream.php?ch=', '')
-                        title_text = title_element.text                        
-                        nameChannel_partes = title_text.split("En Vivo") 
+                        title_text = title_element.text
+                        nameChannel_partes = title_text.split("En Vivo")
                         nameChannel = nameChannel_partes[0].strip()
                         #nameChannel = obtenerTitleRojaOn(url_final_con_api)
                         # Construye la cadena de texto con el formato deseado3
-                        result = f"{nameChannel} | {url_final}"                        
+                        result = f"{nameChannel} | {url_final}"
                         return result
                     print(f"No se encontro el elemento 'iframe' en obtenerUrlFinalRojaOn para : {url_inicial}")
-                    return None               
+                    return None
                 else:
                     #(f"No pudo obtener ulr por {response.status_code}. Reintentando...")
                     time.sleep(5)   # Espera 5 segundos antes de reintentar
-                    retries += 1                 
+                    retries += 1
         except Exception as e:
             print(f"Error en obtenerUrlFinalRojaOn: {str(e)}")
             return None
 
     def obtenerUrlFinalRojaTV(enlace):
         try:
-            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36'}
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36'
+            }
             max_retries = 5
             retries = 0
-            while retries < max_retries:        
+
+            while retries < max_retries:
                 # Inicia roja
                 if 'tarjetarojatv' in enlace or 'elitegoltv' in enlace:
-                    #newenlace = "https://api.allorigins.win/raw?url=" + enlace
-                    #response = requests.get(enlace)
                     response = requests.get(enlace, headers=headers, allow_redirects=True, verify=False)
-                    #print(f'pasa 0 : {response.status_code} | {enlace}')
                     if response.status_code == 200:
-                        #print('pasa 1')
                         soup = BeautifulSoup(response.text, 'html.parser')
                         divElement = soup.find('div', class_='iframe-container')
                         if divElement:
-                            #print('pasa 2')
                             divContent = divElement.encode_contents().decode('utf-8')
                             scriptElement = divElement.find('script')
                             if scriptElement:
-                                #print('pasa 3')
                                 scriptContent = scriptElement.get_text()
                                 fidRegex = re.compile(r'fid="([^"]+)";')
                                 fidMatch = fidRegex.search(scriptContent)
                                 if fidMatch:
-                                    #print('pasa 4')
                                     v_fid = fidMatch.group(1)
                                     srcRegex = re.compile(r'src="([^"]+?/[^/]+)')
                                     srcMatch = srcRegex.search(divContent)
                                     if srcMatch:
-                                        #print('pasa 5')
                                         urlevento = srcMatch.group(1)
                                         if 'radamel' in urlevento:
                                             maxReintentos = 5
                                             Reintentos = 0
-                                            while Reintentos < maxReintentos:  
-                                                headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36'}
+                                            while Reintentos < maxReintentos:
                                                 urlFinal_radamel = f'{urlevento}/reproductor/{v_fid}.php'
-                                                urlFinal =  validate_and_get_url(urlFinal_radamel)
-                                                #responseUrlFinRojaTv = requests.get(urlFinal, headers=headers, allow_redirects=True)
+                                                urlFinal = validate_and_get_url(urlFinal_radamel)
                                                 responseUrlFinRojaTv = requests.get(urlFinal, headers=headers, allow_redirects=True, verify=False)
                                                 if responseUrlFinRojaTv.status_code == 200:
-                                                    #print('pasa 7')
                                                     htmlBody = responseUrlFinRojaTv.text
                                                     iframeSrcRegex = re.compile(r'<iframe[^>]*?allowfullscreen="true"[^>]*?src="([^"]+)"', re.IGNORECASE)
                                                     iframeSrcMatch = iframeSrcRegex.search(htmlBody)
-                                                    #soup = BeautifulSoup(htmlBody, 'html.parser')
-                                                    #title_chanel = soup.find("title").text if soup.find("title") else "No_Channel_Name"                                                
                                                     if iframeSrcMatch:
-                                                        #print('pasa 8')
                                                         newUrlFin = iframeSrcMatch.group(1)
-                                                        if 'livehdplay' in newUrlFin: 
-                                                            newUrlFin = urlFinal_radamel  
-                                                            return newUrlFin
-                                                        return newUrlFin         
+                                                        if 'livehdplay' in newUrlFin:
+                                                            newUrlFin = urlFinal_radamel
+                                                        return newUrlFin
                                                     else:
-                                                        return urlFinal                                                                                         
+                                                        return urlFinal
                                                 else:
-                                                    #print(f"No pudo obtener ulr por {responseUrlFinRojaTv.status_code}. Reintentando...")
-                                                    time.sleep(3)   # Espera 3 segundos antes de reintentar
-                                                    Reintentos += 1  
+                                                    time.sleep(3)  # Espera 3 segundos antes de reintentar
+                                                    Reintentos += 1
                                         elif 'vikistream' in urlevento:
                                             newUrlFinal = f'https://vikistream.com/embed2.php?player=desktop&live={v_fid}'
                                             return newUrlFinal
@@ -702,12 +696,13 @@ while True:
                         else:
                             return enlace
                     else:
-                        #print(f"No pudo obtener ulr por {response.status_code}. Reintentando...")
-                        time.sleep(5)   # Espera 5 segundos antes de reintentar
+                        time.sleep(5)
                         retries += 1
-                return enlace
+                else:
+                    return enlace
+            return enlace
         except Exception as e:
-            print(f'Error en obtenerUrlFinalRojaTV: {e}  newUrlFin: {newUrlFin}')
+            print(f'Error en obtenerUrlFinalRojaTV: {e}')
             return enlace
 
     def obtenerUrlFinalLibreTV(url):
@@ -715,13 +710,15 @@ while True:
             headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36'}
             max_retries = 5
             retries = 0
-            while retries < max_retries:             
+
+            while retries < max_retries:
                 response = requests.get(url, headers=headers, allow_redirects=True, verify=False)
                 if response.status_code == 200:
                     soup = BeautifulSoup(response.text, 'html.parser')
                     iframe_element = soup.find('iframe')
                     src = iframe_element['src'] if iframe_element else None
                     opciones_enlaces_div = soup.find('div', {'align': 'left'})
+
                     # Si el src es "embed.html", extrae la URL final.
                     if src == 'embed.html':
                         src = url + src
@@ -733,8 +730,7 @@ while True:
                         for opcion_enlace in opciones_enlaces:
                             enlace = opcion_enlace['href']
                             texto = opcion_enlace.get_text()
-                            # texto_decoded = texto.encode('latin-1').decode('utf-8')
-                            # Supongamos que 'enlace' es el enlace que deseas procesar
+
                             if enlace.startswith('//'):
                                 enlace = 'https:' + enlace
 
@@ -742,6 +738,7 @@ while True:
                             texto_decoded = process_special_characters(texto)
 
                             enlaces_y_textos.append(f'{enlace_decoded} | {texto_decoded}')
+
                         if enlaces_y_textos:
                             enlaces_textos_juntos = ' | '.join(enlaces_y_textos)
                             return enlaces_textos_juntos
@@ -750,53 +747,43 @@ while True:
                     else:
                         return src
                 else:
-                    #print(f"No pudo obtener ulr por {response.status_code}. Reintentando...")
-                    time.sleep(5)   # Espera 5 segundos antes de reintentar
+                    time.sleep(5)  # Espera 5 segundos antes de reintentar
                     retries += 1
-                return None
+
+            return None  # Si se alcanzan los máximos reintentos y no se obtiene una respuesta satisfactoria
         except Exception as e:
             # Captura cualquier excepcion y muestra el mensaje de error
             print(f"Se produjo un error en obtenerUrlFinalLibreTV: {str(e)}")
+            return None
 
     def obtenerUrlFinalLibreTVSelenium(initial_url):
         try:
             # Configurando las opciones de Chrome para navegacion en segundo plano y sin notificaciones
             chrome_options = Options()
-            chrome_options.add_argument("--headless")   # Navegacion en segundo plano
-            chrome_options.add_argument("--disable-notifications")   # Desactivar notificaciones
+            chrome_options.add_argument("--headless")  # Navegacion en segundo plano
+            chrome_options.add_argument("--disable-notifications")  # Desactivar notificaciones
+            chrome_options.add_argument("--log-level=3")  # Suprimir mensajes de log
+            chrome_options.add_experimental_option('excludeSwitches', ['enable-logging'])
+            chrome_options.add_argument("--silent")
 
-            # Inicializar Chrome WebDriver con las opciones configuradas
+            # Crear una instancia de WebDriver con las opciones especificadas
             driver = webdriver.Chrome(options=chrome_options)
 
             try:
-                # # Configurar el nivel de log del WebDriver
-                # caps = DesiredCapabilities.CHROME
-                # caps['goog:loggingPrefs'] = {'browser': 'SEVERE'}  # Establecer el nivel de log a 'SEVERE'
-                
-                # # Inicializar Chrome WebDriver con las opciones configuradas y el nivel de log establecido
-                # driver = webdriver.Chrome(options=chrome_options, desired_capabilities=caps)            
-                
-                # Navigate to the initial URL
                 driver.get(initial_url)
-
-                # Esperar hasta 10 segundos para que aparezca el iframe
-                wait = WebDriverWait(driver, 10)
+                wait = WebDriverWait(driver, 10)  # Esperar hasta 10 segundos para que aparezca el iframe
                 iframe = wait.until(EC.presence_of_element_located((By.TAG_NAME, 'iframe')))
-                # Wait for the iframe to be present
-                # iframe = driver.find_element(By.TAG_NAME, 'iframe')
-
-                # Extract the 'src' attribute of the iframe
                 final_url = iframe.get_attribute('src')
-
             finally:
-                # Close the WebDriver
+                # Cerrar el WebDriver
                 driver.quit()
 
             return final_url
 
         except Exception as e:
-            # Captura cualquier excepcion y muestra el mensaje de error
+            # Captura cualquier excepción y muestra el mensaje de error
             print(f"Se produjo un error en obtenerUrlFinalLibreTVSelenium: {str(e)}")
+            return None
 
     def obtenerUrlFinalRojaHDme(url):
         max_retries = 5
@@ -833,46 +820,90 @@ while True:
                 retries += 1
         return f'Web | No pudo obtener ulr despues de {max_retries} intentos'
 
-    def verificarExisteEvento(hora_event, name_event):
+    #def verificarExisteEvento(hora_event, name_event):
+    # def verificarExisteEvento(fecha_hora, name_event):
+
+    #     try:
+    #         name_event_lower = name_event.lower()
+    #         evento_existente = None
+    #         debug
+    #         pdb.set_trace()
+    #         Verificar si ya existe un evento con el name_event y fecha_hora
+    #         evento_existente = next((evento for evento in v_list_eventos
+    #                                  if evento["f06_name_event"].lower() in name_event_lower and evento["f03_dia_event"] == fecha_hora), None)
+    #         si no lo encuentra con IN se busca uno igual
+    #         if evento_existente is None:
+    #             evento_existente = next((evento for evento in v_list_eventos
+    #                                      if evento["f06_name_event"].lower() == name_event_lower and evento["f03_dia_event"] == fecha_hora), None)
+    #         si no encuentra con IN o igual se busca que el evento nuevo IN en la lista
+    #         if evento_existente is None:
+    #             evento_existente = next((evento for evento in v_list_eventos
+    #                                      if name_event_lower in evento["f06_name_event"].lower() and evento["f03_dia_event"] == fecha_hora), None)
+
+    #         if evento_existente is None:
+    #             evento_existente = next((evento for evento in v_list_eventos
+    #                                      if fuzz.partial_ratio(evento["f06_name_event"].lower(), name_event_lower) >= 80 and evento["f03_dia_event"] == fecha_hora), None)
+
+    #         if evento_existente is None:
+    #             evento_existente = next((evento for evento in v_list_eventos_3
+    #                                      if evento["f06_name_event"].lower() in name_event_lower and evento["f03_dia_event"] == fecha_hora), None)
+    #         si no lo encuentra con IN se busca uno igual
+    #         if evento_existente is None:
+    #             evento_existente = next((evento for evento in v_list_eventos_3
+    #                                      if evento["f06_name_event"].lower() == name_event_lower and evento["f03_dia_event"] == fecha_hora), None)
+    #         si no encuentra con IN o igual se busca que el evento nuevo IN en la lista
+    #         if evento_existente is None:
+    #             evento_existente = next((evento for evento in v_list_eventos_3
+    #                                      if name_event_lower in evento["f06_name_event"].lower() and evento["f03_dia_event"] == fecha_hora), None)
+
+    #         if evento_existente is None:
+    #             evento_existente = next((evento for evento in v_list_eventos_3
+    #                                      if fuzz.partial_ratio(evento["f06_name_event"].lower(), name_event_lower) >= 80 and evento["f03_dia_event"] == fecha_hora), None)
+
+    #         if evento_existente:
+    #             El evento existe, verificar si la URL ya existe para ese id_document
+    #             id_document = evento_existente["f01_id_document"]
+    #             return id_document
+    #         else:
+    #             return "No"   # El evento no existe
+    #     except Exception as e:
+    #         print(f'Error en verificarExisteEvento: {e}')
+
+    def normalizar_nombre_evento(name_event):
+        common_words = ["vs", "vs.", "-", "fc", "cf", "afc", "(w)", "w", "u17", "u-17", "u18", "u-18", "u19", "u-19", "/", ".", "sc", "lp", ",", "atl"]
+        tokens = name_event.lower().split()
+        filtered_tokens = [token for token in tokens if token not in common_words]
+        return " ".join(filtered_tokens)
+
+    def verificarExisteEvento(fecha_hora, name_event):
         try:
-            name_event_lower = name_event.lower()
+            name_event_normalizado = normalizar_nombre_evento(name_event)
             evento_existente = None
-            #debug
-            #pdb.set_trace()
-            # Verificar si ya existe un evento con el name_event y hora_event
-            evento_existente = next((evento for evento in v_list_eventos if evento["f06_name_event"].lower() in name_event_lower and evento["f04_hora_event"] == hora_event), None)
-            # si no lo encuentra con IN se busca uno igual
-            if evento_existente is None:
-                evento_existente = next((evento for evento in v_list_eventos if evento["f06_name_event"].lower() == name_event_lower and evento["f04_hora_event"] == hora_event), None)
-            # si no encuentra con IN o igual se busca que el evento nuevo IN en la lista
-            if evento_existente is None:
-                evento_existente = next((evento for evento in v_list_eventos if name_event_lower in evento["f06_name_event"].lower() and evento["f04_hora_event"] == hora_event), None)
 
-            if evento_existente is None:
-                evento_existente = next((evento for evento in v_list_eventos if fuzz.partial_ratio(evento["f06_name_event"].lower(), name_event_lower) >= 80 and evento["f04_hora_event"] == hora_event), None)                 
+            # Funcion de comparacion de eventos
+            def comparar_eventos(evento):
+                evento_name_normalizado = normalizar_nombre_evento(evento["f06_name_event"])
+                return (
+                    fuzz.token_set_ratio(evento_name_normalizado, name_event_normalizado) >= 80
+                    and evento["f03_dia_event"] == fecha_hora
+                )
 
-            if evento_existente is None:
-               evento_existente = next((evento for evento in v_list_eventos_3 if evento["f06_name_event"].lower() in name_event_lower and evento["f04_hora_event"] == hora_event), None)
-            # si no lo encuentra con IN se busca uno igual
-            if evento_existente is None:
-                evento_existente = next((evento for evento in v_list_eventos_3 if evento["f06_name_event"].lower() == name_event_lower and evento["f04_hora_event"] == hora_event), None)
-            # si no encuentra con IN o igual se busca que el evento nuevo IN en la lista
-            if evento_existente is None:
-                evento_existente = next((evento for evento in v_list_eventos_3 if name_event_lower in evento["f06_name_event"].lower() and evento["f04_hora_event"] == hora_event), None)
+            # Verificar en la lista de eventos principal
+            evento_existente = next((evento for evento in v_list_eventos if comparar_eventos(evento)), None)
 
+            # Si no se encuentra en la lista principal, verificar en la lista secundaria
             if evento_existente is None:
-                evento_existente = next((evento for evento in v_list_eventos_3 if fuzz.partial_ratio(evento["f06_name_event"].lower(), name_event_lower) >= 80 and evento["f04_hora_event"] == hora_event), None)            
-
+                evento_existente = next((evento for evento in v_list_eventos_3 if comparar_eventos(evento)), None)
 
             if evento_existente:
-                # El evento existe, verificar si la URL ya existe para ese id_document
                 id_document = evento_existente["f01_id_document"]
                 return id_document
             else:
-                return "No"   # El evento no existe
+                return "No"
         except Exception as e:
             print(f'Error en verificarExisteEvento: {e}')
-            
+            return "Error"
+
     def verificarExisteUrlEvento(id_document, urlFinal):
         try:
             # Buscar el evento con el id_document proporcionado
@@ -883,14 +914,14 @@ while True:
                 url_existe = any(detalle.get("f24_url_Final").lower() == urlFinal.lower() for detalle in detalles_evento)
             else:
                 return "No_Existe_Url"   # La URL no existe para ese id_document
-                
+
             if url_existe:
                 return "Si_Existe_Url"   # La URL ya existe para ese id_document
             else:
                 return "No_Existe_Url"   # La URL no existe para ese id_document
         except Exception as e:
             print(f'Error en verificarExisteUrlEvento: {e}')
-            
+
     def contains_not_available_text(url):
         try:
             headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3'}
@@ -903,7 +934,7 @@ while True:
                 # if contains_text_1 or contains_text_2:
                 # Buscar la tabla especifica en el documento HTML
                 tables = document.select('table.lnktbj')
-                
+
                 # Verificar si se encontro alguna tabla
                 if tables:
                     return 'NO'
@@ -912,7 +943,7 @@ while True:
             return 'NO'
         except Exception as e:
             print(f'Error en contains_not_available_text: {e}')
-            
+
     def obtener_url_live_tv_final(enlace):
         try:
             headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3'}
@@ -948,12 +979,31 @@ while True:
     def encontrar_indice_nombre_evento(evento, liveTds):
         for i, td in enumerate(liveTds):
             td_text = td.get_text().strip()
-            similarity_ratio = fuzz.partial_ratio(evento.lower(), td_text.lower())   
+            similarity_ratio = fuzz.partial_ratio(evento.lower(), td_text.lower())
             if similarity_ratio >= 95:
                 return i
         return None
 
+    def month_str_to_num(month_str):
+        months = {
+            "January": "01", "February": "02", "March": "03", "April": "04",
+            "May": "05", "June": "06", "July": "07", "August": "08",
+            "September": "09", "October": "10", "November": "11", "December": "12"
+        }
+        return months.get(month_str, "00")
+
+    def convert_to_24h(time_str):
+        return datetime.strptime(time_str, "%I:%M %p").strftime("%H:%M")
+
+    async def enviar_mensaje_telegram_channel(p_message):
+        try:
+            await bot_tg_canal.send_message(chat_id=chat_id_channel, text=p_message)
+            print("Mensaje enviado al canal con exito.")
+        except telegram.error.TelegramError as e:
+            print(f"Error al enviar el mensaje al canal: {e}")
+
     eventNextDay = False
+    fecha_event = None
     event_categoria = None
     url_flag = None
     jug_Local = None
@@ -984,28 +1034,33 @@ while True:
         'Domingo': 'SUNDAY'
     }
 
-    # def traducir_dia_espanol_a_ingles(dia_espanol):
-    #     #dia_espanol = dia_espanol.lower().strip()
-    #     return dias_traducidos.get(dia_espanol, "Unknown day")    
-
-
     now = datetime.now()
     currentDayOfWeek = diassemana[now.weekday()]
 
     def procesar_Bases():
         try:
             print(f"Inicia procesar_Bases")
+            global eventNextDay
             global event_categoria
             global url_flag
             global jug_Local
             global logo_Local
             global jug_Visita
             global logo_Visita
+            global channel_name
+            global imagenIdiom
+            global text_idiom
             global existeEvent
             global contador_registros
+
+            dia_event = None
+            hora_event = None
+            name_event = None
+
             name_Max_Event_Bases = None
             name_Penultimate_Event_Bases = None
             name_Antepenultimate_Event_Bases = None
+
             if v_list_eventos_Bases:
                 # ultimo_evento = max(v_list_eventos_Bases, key=lambda x: x.get('f01_id_document'))
                 # name_Max_Event_Bases = ultimo_evento.get('f06_name_event').replace('Vs', '–')
@@ -1016,7 +1071,7 @@ while True:
                 try:
                     ultimo_evento = v_list_eventos_Bases_sorted[-1]
                     name_Max_Event_Bases = ultimo_evento.get('f06_name_event').replace('Vs', '–')
-                    #print(f"Ultimo evento: {name_Max_Event_Bases}")
+                     #print(f"Ultimo evento: {name_Max_Event_Bases}")
                 except IndexError:
                     print("No hay suficientes eventos para determinar el ultimo evento.")
 
@@ -1030,7 +1085,7 @@ while True:
                 try:
                     antepenultimo_evento = v_list_eventos_Bases_sorted[-3]
                     name_Antepenultimate_Event_Bases = antepenultimo_evento.get('f06_name_event').replace('Vs', '–')
-                    #print(f"Antepenultimo evento: {name_Antepenultimate_Event_Bases}")
+                     #print(f"Antepenultimo evento: {name_Antepenultimate_Event_Bases}")
                 except IndexError:
                     print("No hay suficientes eventos para determinar el antepeniltimo evento.")
 
@@ -1040,7 +1095,6 @@ while True:
             soup = BeautifulSoup(html_contentBases, 'html.parser')
             #td_elements = soup.find_all('td', {'colspan': '2'})
             td_elements = soup.find_all('td', colspan='2', height='38', valign='top', width='33%')
-
             indice_nombre_evento = None
 
             eventos_bases = {
@@ -1051,192 +1105,128 @@ while True:
 
             for nombre_evento, condicion in eventos_bases.items():
                 if condicion is not None and indice_nombre_evento is None:
+                    #print(f'nombre_evento: {nombre_evento}')
                     indice_nombre_evento = encontrar_indice_nombre_evento(nombre_evento, td_elements)
                     if indice_nombre_evento is not None:
                         break
 
-            # Si se encuentra el indice del nombre del evento   
+            #print(f'entra: indice_nombre_evento: {indice_nombre_evento}')
+            #sys.exit()
+            # Si se encuentra el indice del nombre del evento
             if indice_nombre_evento is not None:
                 v_list_events_web_base = []
                 for td in td_elements:
                     texto_completo = td.get_text()
+                    lines = [line.strip() for line in texto_completo.splitlines() if line.strip()]
+                    if len(lines) >= 2:
+                        date_str, time_str = lines[1].split(' at ')
+                        day = date_str.split()[0]
+                        month_str = date_str.split()[1]
+                        month = month_str_to_num(month_str)
+                        day = day.zfill(2)
+
+                        hour, minute = time_str.split(':')
+                        time_str = f"{hour.zfill(2)}:{minute}"
+                        fecha_event_web = f"2024-{month}-{day} {time_str}"
+                        fecha_event_web = datetime.strptime(f"{fecha_event_web}", '%Y-%m-%d %H:%M')
+                        fecha_event_web -= timedelta(hours=6)
+                        fecha_event_web = fecha_event_web.strftime('%Y-%m-%d %H:%M')
+                    #     print(f'day: {day} | fecha_event_web {fecha_event_web} | lines {lines}')
+                    #     continue
                     name_event = next((line.strip() for line in texto_completo.splitlines() if line.strip()), '')
-                    v_list_events_web_base.append(name_event)
-            
-                # Iterar sobre los eventos en v_list_eventos_Bases
+                     #print(f'En PAGE - fecha_event_web: {fecha_event_web} | name_event: {name_event}')
+                    v_list_events_web_base.append({
+                        'name_event': name_event,
+                        'fecha_event_web': fecha_event_web
+                    })
+                #sys.exit()
+                 # # Iterar sobre los eventos en v_list_eventos_Bases
                 for evento in v_list_eventos_Bases:
                     try:
                         name_event = evento.get('f06_name_event')
                         nombre_evento_base = name_event.replace('Vs', '–')
-                        # Verificar si v_local y v_visita no estan en el texto de los td                  
-                        if all(fuzz.partial_ratio(nombre_evento_base.lower(), v_nombre_web) < 95 for v_nombre_web in v_list_events_web_base):
-                        #if (nombre_evento_base.lower() not in name_event().lower() for name_event in v_list_events_web_base):
+                        fecha_event_base = evento.get('f03_dia_event')
+                         #print(f'En BASE - fecha_event_web: {fecha_event_web} | nombre_evento_base: {nombre_evento_base}')
+                        exists = any(
+                            fuzz.partial_ratio(nombre_evento_base.lower(), v_event['name_event'].lower()) > 80
+                            and fecha_event_base == v_event['fecha_event_web']
+                            for v_event in v_list_events_web_base
+                        )
+                        if not exists:
                             document_id = evento.get('f01_id_document')
                             proveedor = evento.get('f02_proveedor')
                             if document_id and "Bases" in proveedor:
                                 try:
-                                    # Eliminar el evento de la base de datos
                                     t_eventos.delete_item(Key={"f01_id_document": document_id, "f02_proveedor": proveedor})
-                                    print(f"Se elimino de Bases el ID {document_id} | evento: {name_event}")
+                                    print(f"Se elimino de Bases el ID: {document_id} | {fecha_event_base} | {name_event}")
                                 except Exception as e:
-                                    print(f"Ocurrio un error al eliminar el evento: {name_event} con el ID {document_id} | {e}")      
+                                    print(f"Ocurrio un error al eliminar el evento: {name_event} con el ID {document_id} | {e}")
                     except Exception as e:
-                        print(f"Ocurrio un error en la eliminacion de eventos desde Bases: {name_event} con el nombre_evento_live {nombre_evento_base} | {e}")               
+                        print(f"Ocurrio un error en la eliminacion de eventos desde Bases: {name_event} con el nombre_evento_live {nombre_evento_base} | {e}")
+                #sys.exit()
                 for td in td_elements[indice_nombre_evento + 1:]:
                     tables = td.find_all('table', {'cellpadding': '1', 'cellspacing': '2', 'width': '100%'})
                     for table in tables:
                         span_evdesc = table.find('span', {'class': 'evdesc'})
-                        if span_evdesc:
-                            evdesc_text = span_evdesc.get_text(strip=True)
-                            hora_match = re.search(r'\b\d{1,2}:\d{2}\b', evdesc_text)
-                            if hora_match:
-                                hora_event = hora_match.group()
-                                hora_event_inicio = int(hora_event.split(':')[0].zfill(2))   # Asegura que siempre tenga dos caracteres
-                                hora_event_inicio -= 6
-                                hora_event_inicio %= 24
-                                hora_event = str(hora_event_inicio).zfill(2) + ':' + hora_event[2:]
-                                hora_event = hora_event.replace('::',':')                            
+                        span_evdesc = span_evdesc.get_text()
+                        lines = [line.strip() for line in span_evdesc.splitlines() if line.strip()]
+                        date_str, hora_event = lines[0].split(' at ')
+                        day = date_str.split()[0]
+                        month_str = date_str.split()[1]
+                        month = month_str_to_num(month_str)
+                        day = day.zfill(2)
+
+                        hour, minute = hora_event.split(':')
+                        hora_event = f"{hour.zfill(2)}:{minute}"
+                        # hora_event_inicio = int(hora_event.split(':')[0].zfill(2))   # Asegura que siempre tenga dos caracteres
+                        # # hora_event_inicio -= 6
+                        # hora_event_inicio %= 24
+                        dia_event = f"2024{month}{day}"
+                        # print(f'lines: {lines[0]} | day: {day} | dia_event: {dia_event}')
+                        # sys.exit()
+
+                        # fecha_event_web = f"2024-{month}-{day} {hora_event}"
+                        # fecha_event_web = datetime.strptime(f"{fecha_event_web}", '%Y-%m-%d %H:%M')
+                        # fecha_event_web -= timedelta(hours=6)
+                        # fecha_event_web = fecha_event_web.strftime('%Y-%m-%d %H:%M')
+
+                        # print(f'fecha_event_web: {fecha_event_web}')
+                        # sys.exit()
+                        # if span_evdesc:
+                        #     evdesc_text = span_evdesc.get_text(strip=True)
+                        #     hora_match = re.search(r'\b\d{1,2}:\d{2}\b', evdesc_text)
+                        #     if hora_match:
+                        #         hora_event = hora_match.group()
+                        #         # horas, minutos = hora_event.split(':')
+                        #         # horas = horas.zfill(2)
+                        #         # hora_event = f"{horas}:{minutos}"
+                        #         hora_event_inicio = int(hora_event.split(':')[0].zfill(2))   # Asegura que siempre tenga dos caracteres
+                        #         # hora_event_inicio -= 6
+                        #         hora_event_inicio %= 24
+                        #         hora_event = str(hora_event_inicio).zfill(2) + ':' + hora_event[2:]
+                        #         hora_event = hora_event.replace('::',':')
+
                         img_alt = table.find('img')['alt']
-                        event_categoria = img_alt               
+                        event_categoria = img_alt
                         aElement = table.select_one('a.live')
                         if aElement is None:
                             continue
                         nameEventOld = aElement.text if aElement else ''
                         name_event = re.sub(r'\s+', ' ', re.sub(r'(?<=\s)[–](?=\s)', 'Vs', nameEventOld)).strip()
                         # if 'Auxerre' not in name_event:
-                        #     continue                                                            
+                        #     continue
                         img_src = table.find('img')['src']
-                        url_flag = img_src.lstrip('/') 
-                        url_flag = f"https://{url_flag}"
-
-                        url_event = aElement['href']                        
-                        url_event = f'https://livetv.sx{url_event}'                        
-                        url_event =  validate_and_get_url(url_event)    
-                        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36'}
-                        responseL = requests.get(url_event, headers=headers, allow_redirects=True, verify=False)
-                    
-                        document = BeautifulSoup(responseL.content, 'html.parser')
-                        imagesWithItemprop = document.select('img[itemprop]')    
-
-                        if len(imagesWithItemprop) >= 2:
-                            logoLocalOld = imagesWithItemprop[0]['src'] if 'src' in imagesWithItemprop[0].attrs else ''
-                            logoVisitaOld = imagesWithItemprop[1]['src'] if 'src' in imagesWithItemprop[1].attrs else ''
-                            jug_Local = imagesWithItemprop[0]['alt'] if 'alt' in imagesWithItemprop[0].attrs else ''
-                            logo_Local = f"https:{logoLocalOld}"
-                            jug_Visita = imagesWithItemprop[1]['alt'] if 'alt' in imagesWithItemprop[1].attrs else ''
-                            logo_Visita = f"https:{logoVisitaOld}"
-
-                        if logo_Local is not None and "/." in logo_Local:
-                            logo_Local = None
-                        if logo_Visita is not None and "/." in logo_Visita:
-                            logo_Visita = None
-
-                        if contador_registros > 0:
-                            existeEvent = verificarExisteEvento(hora_event,name_event)
-                        if existeEvent == "No" or contador_registros == 0:
-                            contador_registros += 1
-                            evento = {
-                                    "f01_id_document": contador_registros,
-                                    "f02_proveedor" : "Bases",
-                                    "f03_dia_event" : None,
-                                    'f04_hora_event': hora_event,
-                                    'f05_event_categoria': event_categoria,
-                                    'f06_name_event': name_event,
-                                    'f07_URL_Flag': url_flag,
-                                    'f08_jug_Local': jug_Local,
-                                    'f09_logo_Local': logo_Local,
-                                    'f10_jug_Visita': jug_Visita,
-                                    'f11_logo_Visita': logo_Visita
-                                    }
-                            v_list_eventos.append(evento)
-                            print(f'Se adiciona evento nuevo desde Bases: ID: {contador_registros} | {hora_event} | {event_categoria} | {name_event}')
-                        else:
-                            evento_existente = next((evento for evento in v_list_eventos + v_list_eventos_3 if evento.get("f01_id_document") == existeEvent), None)                                                                
-                            if evento_existente:   
-                                actualiza_algo = False
-                                proveedor = evento_existente['f02_proveedor']                                                                                                              
-                                if 'Bases' not in evento_existente['f02_proveedor']:
-                                    evento_existente['f02_proveedor'] += ' | Bases'
-                                    #print(f'Actualiza proveedor desde Bases : Antes {proveedor} | Ahora {evento_existente['f02_proveedor']}')
-                                    actualiza_algo = True
-                                if evento_existente['f07_URL_Flag'] is None and url_flag is not None:
-                                    #print(f'Actualiza url_flag desde Bases : Antes {evento_existente['f07_URL_Flag']} | Ahora {url_flag}')
-                                    evento_existente['f07_URL_Flag'] = url_flag                                    
-                                    actualiza_algo = True
-                                if evento_existente['f05_event_categoria'] is None and event_categoria is not None:
-                                    #print(f'Actualiza event_categoria desde Bases : Antes {evento_existente['f05_event_categoria']} | Ahora {event_categoria}')
-                                    evento_existente['f05_event_categoria'] = event_categoria
-                                    actualiza_algo = True
-                                if evento_existente['f08_jug_Local'] is None and jug_Local is not None:
-                                    #print(f'Actualiza jug_Local desde Bases : Antes {evento_existente['f08_jug_Local']} | Ahora {jug_Local}')
-                                    evento_existente['f08_jug_Local'] = jug_Local
-                                    actualiza_algo = True
-                                if evento_existente['f09_logo_Local'] is None and logo_Local is not None:
-                                    #print(f'Actualiza logo_Local desde Bases : Antes {evento_existente['f09_logo_Local']} | Ahora {logo_Local}')
-                                    evento_existente['f09_logo_Local'] = logo_Local
-                                    actualiza_algo = True
-                                if evento_existente['f10_jug_Visita'] is None and jug_Visita is not None:
-                                    #print(f'Actualiza jug_Visita desde Bases : Antes {evento_existente['f10_jug_Visita']} | Ahora {jug_Visita}')
-                                    evento_existente['f10_jug_Visita'] = jug_Visita
-                                    actualiza_algo = True
-                                if evento_existente['f11_logo_Visita'] is None and logo_Visita is not None:
-                                    #print(f'Actualiza logo_Visita desde Bases : Antes {evento_existente['f11_logo_Visita']} | Ahora {logo_Visita}')
-                                    evento_existente['f11_logo_Visita'] = logo_Visita
-                                    actualiza_algo = True
-
-                                if actualiza_algo:
-                                    if evento_existente in v_list_eventos:
-                                        v_list_eventos[v_list_eventos.index(evento_existente)] = evento_existente        
-                                        print(f'Se actualiza evento existente desde Bases : {hora_event} | {event_categoria} | {name_event}')
-                                    else:
-                                        t_eventos.delete_item(Key={"f01_id_document": existeEvent, "f02_proveedor": proveedor})
-                                        t_eventos.put_item(Item=evento_existente)            
-                                        #print(f'Se actualiza evento existente en BD desde Bases : {hora_event} | {event_categoria} | {name_event}') 
-                        name_event = None
-                        hora_event = None
-                        event_categoria = None
-                        url_flag = None
-                        jug_Local = None
-                        logo_Local = None
-                        jug_Visita = None
-                        logo_Visita = None                                                                              
-            else:
-                for td in td_elements:
-                    tables = td.find_all('table', {'cellpadding': '1', 'cellspacing': '2', 'width': '100%'})
-                    for table in tables:               
-                        span_evdesc = table.find('span', {'class': 'evdesc'})
-                        if span_evdesc:
-                            evdesc_text = span_evdesc.get_text(strip=True)
-                            hora_match = re.search(r'\b\d{1,2}:\d{2}\b', evdesc_text)
-                            if hora_match:
-                                hora_event = hora_match.group()
-                                hora_event_inicio = int(hora_event.split(':')[0].zfill(2))   # Asegura que siempre tenga dos caracteres
-                                hora_event_inicio -= 6
-                                hora_event_inicio %= 24
-                                hora_event = str(hora_event_inicio).zfill(2) + ':' + hora_event[2:]
-                                hora_event = hora_event.replace('::',':')                            
-                        img_alt = table.find('img')['alt']
-                        event_categoria = img_alt               
-                        aElement = table.select_one('a.live')
-                        if aElement is None:
-                            continue
-                        nameEventOld = aElement.text if aElement else ''
-                        name_event = re.sub(r'\s+', ' ', re.sub(r'(?<=\s)[–](?=\s)', 'Vs', nameEventOld)).strip()        
-                        # if 'Auxerre' not in name_event:
-                        #     continue                                                             
-                        
-                        img_src = table.find('img')['src']
-                        url_flag = img_src.lstrip('/') 
+                        url_flag = img_src.lstrip('/')
                         url_flag = f"https://{url_flag}"
 
                         url_event = aElement['href']
-                        url_event = f'https://livetv.sx{url_event}'                        
-                        url_event =  validate_and_get_url(url_event)    
+                        url_event = f'https://livetv.sx{url_event}'
+                        url_event =  validate_and_get_url(url_event)
                         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36'}
                         responseL = requests.get(url_event, headers=headers, allow_redirects=True, verify=False)
-                    
+
                         document = BeautifulSoup(responseL.content, 'html.parser')
-                        imagesWithItemprop = document.select('img[itemprop]')    
+                        imagesWithItemprop = document.select('img[itemprop]')
 
                         if len(imagesWithItemprop) >= 2:
                             logoLocalOld = imagesWithItemprop[0]['src'] if 'src' in imagesWithItemprop[0].attrs else ''
@@ -1245,19 +1235,35 @@ while True:
                             logo_Local = f"https:{logoLocalOld}"
                             jug_Visita = imagesWithItemprop[1]['alt'] if 'alt' in imagesWithItemprop[1].attrs else ''
                             logo_Visita = f"https:{logoVisitaOld}"
+
                         if logo_Local is not None and "/." in logo_Local:
                             logo_Local = None
                         if logo_Visita is not None and "/." in logo_Visita:
                             logo_Visita = None
 
+                        # if contador_registros > 2 and hora_event_inicio > 18:
+                        #     eventNextDay = True
+                        # # Verificar si eventNextDay es True y hora_event < 9
+                        # if eventNextDay and hora_event_inicio < 9:
+                        #     # Incrementar dia_event en 1 dia
+                        #     dia_event = datetime.strptime(dia_event, '%Y%m%d')
+                        #     dia_event += timedelta(days=1)
+                        #     dia_event = dia_event.strftime('%Y%m%d')
+
+                        fecha_hora = datetime.strptime(f"{dia_event} {hora_event}", '%Y%m%d %H:%M')
+                        fecha_hora -= timedelta(hours=6)
+                        hora_event = fecha_hora.strftime("%H:%M")
+                        fecha_hora = fecha_hora.strftime('%Y-%m-%d %H:%M')
+
                         if contador_registros > 0:
-                            existeEvent = verificarExisteEvento(hora_event,name_event)
+                            #existeEvent = verificarExisteEvento(hora_event,name_event)
+                            existeEvent = verificarExisteEvento(fecha_hora,name_event)
                         if existeEvent == "No" or contador_registros == 0:
                             contador_registros += 1
                             evento = {
                                     "f01_id_document": contador_registros,
                                     "f02_proveedor" : "Bases",
-                                    "f03_dia_event" : None,
+                                    "f03_dia_event" : fecha_hora,
                                     'f04_hora_event': hora_event,
                                     'f05_event_categoria': event_categoria,
                                     'f06_name_event': name_event,
@@ -1268,10 +1274,11 @@ while True:
                                     'f11_logo_Visita': logo_Visita
                                     }
                             v_list_eventos.append(evento)
-                            print(f'Se adiciona evento desde Bases: ID: {contador_registros} | {hora_event} | {event_categoria} | {name_event}')
+                            print(f'Se adiciona evento nuevo desde Bases: '
+                                  f'ID: {contador_registros} | {fecha_hora} | {hora_event} | {event_categoria} | {name_event}')
                         else:
-                            evento_existente = next((evento for evento in v_list_eventos + v_list_eventos_3 if evento.get("f01_id_document") == existeEvent), None)                                                                
-                            if evento_existente:     
+                            evento_existente = next((evento for evento in v_list_eventos + v_list_eventos_3 if evento.get("f01_id_document") == existeEvent), None)
+                            if evento_existente:
                                 actualiza_algo = False
                                 proveedor = evento_existente['f02_proveedor']
                                 if 'Bases' not in evento_existente['f02_proveedor']:
@@ -1298,12 +1305,150 @@ while True:
 
                                 if actualiza_algo:
                                     if evento_existente in v_list_eventos:
-                                        v_list_eventos[v_list_eventos.index(evento_existente)] = evento_existente        
-                                        print(f'Se actualiza evento desde Bases: ID:{existeEvent} | {hora_event} | {event_categoria} | {name_event}')                                                                
+                                        v_list_eventos[v_list_eventos.index(evento_existente)] = evento_existente
+                                        print(f'Se actualiza evento existente desde Bases: '
+                                                f'ID: {existeEvent} | {fecha_hora} | {hora_event} | {event_categoria} | {name_event}')
                                     else:
                                         t_eventos.delete_item(Key={"f01_id_document": existeEvent, "f02_proveedor": proveedor})
-                                        t_eventos.put_item(Item=evento_existente)            
-                                        print(f'Se actualiza evento en BD desde Bases: ID:{existeEvent} | {hora_event} | {event_categoria} | {name_event}')
+                                        t_eventos.put_item(Item=evento_existente)
+                                        print(f'Se actualiza evento en BD desde Bases: '
+                                                f'ID: {existeEvent} | {fecha_hora} | {hora_event} | {event_categoria} | {name_event}')
+
+                        name_event = None
+                        hora_event = None
+                        event_categoria = None
+                        url_flag = None
+                        jug_Local = None
+                        logo_Local = None
+                        jug_Visita = None
+                        logo_Visita = None
+            else:
+                for td in td_elements:
+                    tables = td.find_all('table', {'cellpadding': '1', 'cellspacing': '2', 'width': '100%'})
+                    for table in tables:
+                        span_evdesc = table.find('span', {'class': 'evdesc'})
+                        span_evdesc = span_evdesc.get_text()
+                        lines = [line.strip() for line in span_evdesc.splitlines() if line.strip()]
+                        date_str, hora_event = lines[0].split(' at ')
+                        day = date_str.split()[0]
+                        month_str = date_str.split()[1]
+                        month = month_str_to_num(month_str)
+                        day = day.zfill(2)
+
+                        hour, minute = hora_event.split(':')
+                        hora_event = f"{hour.zfill(2)}:{minute}"
+                        # hora_event_inicio = int(hora_event.split(':')[0].zfill(2))   # Asegura que siempre tenga dos caracteres
+                        # # hora_event_inicio -= 6
+                        # hora_event_inicio %= 24
+                        dia_event = f"2024{month}{day}"
+
+                        img_alt = table.find('img')['alt']
+                        event_categoria = img_alt
+                        aElement = table.select_one('a.live')
+                        if aElement is None:
+                            continue
+                        nameEventOld = aElement.text if aElement else ''
+                        name_event = re.sub(r'\s+', ' ', re.sub(r'(?<=\s)[–](?=\s)', 'Vs', nameEventOld)).strip()
+                        # if 'Auxerre' not in name_event:
+                        #     continue
+
+                        img_src = table.find('img')['src']
+                        url_flag = img_src.lstrip('/')
+                        url_flag = f"https://{url_flag}"
+
+                        url_event = aElement['href']
+                        url_event = f'https://livetv.sx{url_event}'
+                        url_event =  validate_and_get_url(url_event)
+                        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36'}
+                        responseL = requests.get(url_event, headers=headers, allow_redirects=True, verify=False)
+
+                        document = BeautifulSoup(responseL.content, 'html.parser')
+                        imagesWithItemprop = document.select('img[itemprop]')
+
+                        if len(imagesWithItemprop) >= 2:
+                            logoLocalOld = imagesWithItemprop[0]['src'] if 'src' in imagesWithItemprop[0].attrs else ''
+                            logoVisitaOld = imagesWithItemprop[1]['src'] if 'src' in imagesWithItemprop[1].attrs else ''
+                            jug_Local = imagesWithItemprop[0]['alt'] if 'alt' in imagesWithItemprop[0].attrs else ''
+                            logo_Local = f"https:{logoLocalOld}"
+                            jug_Visita = imagesWithItemprop[1]['alt'] if 'alt' in imagesWithItemprop[1].attrs else ''
+                            logo_Visita = f"https:{logoVisitaOld}"
+                        if logo_Local is not None and "/." in logo_Local:
+                            logo_Local = None
+                        if logo_Visita is not None and "/." in logo_Visita:
+                            logo_Visita = None
+
+                        # if contador_registros > 2 and hora_event_inicio > 18:
+                        #     eventNextDay = True
+                        # # Verificar si eventNextDay es True y hora_event < 9
+                        # if eventNextDay and hora_event_inicio < 9:
+                        #     # Incrementar dia_event en 1 dia
+                        #     dia_event = datetime.strptime(dia_event, '%Y%m%d')
+                        #     dia_event += timedelta(days=1)
+                        #     dia_event = dia_event.strftime('%Y%m%d')
+
+                        fecha_hora = datetime.strptime(f"{dia_event} {hora_event}", '%Y%m%d %H:%M')
+                        fecha_hora -= timedelta(hours=6)
+                        hora_event = fecha_hora.strftime("%H:%M")
+                        fecha_hora = fecha_hora.strftime('%Y-%m-%d %H:%M')
+
+                        if contador_registros > 0:
+                            #existeEvent = verificarExisteEvento(hora_event,name_event)
+                            existeEvent = verificarExisteEvento(fecha_hora,name_event)
+                        if existeEvent == "No" or contador_registros == 0:
+                            contador_registros += 1
+                            evento = {
+                                    "f01_id_document": contador_registros,
+                                    "f02_proveedor" : "Bases",
+                                    "f03_dia_event" : fecha_hora,
+                                    'f04_hora_event': hora_event,
+                                    'f05_event_categoria': event_categoria,
+                                    'f06_name_event': name_event,
+                                    'f07_URL_Flag': url_flag,
+                                    'f08_jug_Local': jug_Local,
+                                    'f09_logo_Local': logo_Local,
+                                    'f10_jug_Visita': jug_Visita,
+                                    'f11_logo_Visita': logo_Visita
+                                    }
+                            v_list_eventos.append(evento)
+                            print(f'Se adiciona evento desde Bases: '
+                                  f'ID: {contador_registros} | {fecha_hora} | {hora_event} | {event_categoria} | {name_event}')
+                        else:
+                            evento_existente = next((evento for evento in v_list_eventos + v_list_eventos_3 if evento.get("f01_id_document") == existeEvent), None)
+                            if evento_existente:
+                                actualiza_algo = False
+                                proveedor = evento_existente['f02_proveedor']
+                                if 'Bases' not in evento_existente['f02_proveedor']:
+                                    evento_existente['f02_proveedor'] += ' | Bases'
+                                    actualiza_algo = True
+                                if evento_existente['f07_URL_Flag'] is None and url_flag is not None:
+                                    evento_existente['f07_URL_Flag'] = url_flag
+                                    actualiza_algo = True
+                                if evento_existente['f05_event_categoria'] is None and event_categoria is not None:
+                                    evento_existente['f05_event_categoria'] = event_categoria
+                                    actualiza_algo = True
+                                if evento_existente['f08_jug_Local'] is None and jug_Local is not None:
+                                    evento_existente['f08_jug_Local'] = jug_Local
+                                    actualiza_algo = True
+                                if evento_existente['f09_logo_Local'] is None and logo_Local is not None:
+                                    evento_existente['f09_logo_Local'] = logo_Local
+                                    actualiza_algo = True
+                                if evento_existente['f10_jug_Visita'] is None and jug_Visita is not None:
+                                    evento_existente['f10_jug_Visita'] = jug_Visita
+                                    actualiza_algo = True
+                                if evento_existente['f11_logo_Visita'] is None and logo_Visita is not None:
+                                    evento_existente['f11_logo_Visita'] = logo_Visita
+                                    actualiza_algo = True
+
+                                if actualiza_algo:
+                                    if evento_existente in v_list_eventos:
+                                        v_list_eventos[v_list_eventos.index(evento_existente)] = evento_existente
+                                        print(f'Se actualiza evento desde Bases: '
+                                                f'ID: {existeEvent} | {fecha_hora} | {fecha_hora} | {hora_event} | {event_categoria} | {name_event}')
+                                    else:
+                                        t_eventos.delete_item(Key={"f01_id_document": existeEvent, "f02_proveedor": proveedor})
+                                        t_eventos.put_item(Item=evento_existente)
+                                        print(f'Se actualiza evento en BD desde Bases: '
+                                                f'ID: {existeEvent} | {fecha_hora} | {fecha_hora} | {hora_event} | {event_categoria} | {name_event}')
                         name_event = None
                         hora_event = None
                         event_categoria = None
@@ -1319,11 +1464,6 @@ while True:
     def procesar_LiveTV():
         try:
             print(f"Inicia procesar_LiveTV")
-            dia_event = None
-            hora_event = None
-            name_event = None
-            urlFinal = None
-
             global eventNextDay
             global event_categoria
             global url_flag
@@ -1335,11 +1475,17 @@ while True:
             global imagenIdiom
             global text_idiom
             global existeEvent
-            global contador_registros      
-                
+            global contador_registros
+
+            dia_event = None
+            hora_event = None
+            name_event = None
+            urlFinal = None
+
             name_Max_Event_LiveTV = None
             name_Penultimate_Event_LiveTV = None
             name_Antepenultimate_Event_LiveTV = None
+
             contar_events_sin_links = 0
             cantidad_reg_pasar = 20
             if v_list_eventos_LiveTV:
@@ -1390,77 +1536,93 @@ while True:
                         #print(f"indice_nombre_evento {indice_nombre_evento} | nombre_evento: {nombre_evento}")
                         break
 
-            # Si se encuentra el indice del nombre del evento   
+            # Si se encuentra el indice del nombre del evento
             if indice_nombre_evento is not None:
                 try:
-                    #evento_especifico = "Pakistan (W) – West Indies (W)"
                     v_list_events_web_base = []
                     for td in td_elements:
                         texto_completo = td.get_text()
+                        lines = [line.strip() for line in texto_completo.splitlines() if line.strip()]
+                        if len(lines) >= 2:
+                            date_str, time_str = lines[1].split(' at ')
+                            day = date_str.split()[0]
+                            month_str = date_str.split()[1]
+                            month = month_str_to_num(month_str)
+                            day = day.zfill(2)
+                            hour, minute = time_str.split(':')
+                            time_str = f"{hour.zfill(2)}:{minute}"
+                            fecha_event_web = f"2024-{month}-{day} {time_str}"
+
+                            fecha_event_web = datetime.strptime(f"{fecha_event_web}", '%Y-%m-%d %H:%M')
+                            fecha_event_web -= timedelta(hours=6)
+                            fecha_event_web = fecha_event_web.strftime('%Y-%m-%d %H:%M')
                         name_event = next((line.strip() for line in texto_completo.splitlines() if line.strip()), '')
-                        v_list_events_web_base.append(name_event)                        
-                        #print(f"Se adiciona a v_list_events_web_base {name_event}")
-                        #similaridad = fuzz.partial_ratio(evento_especifico.lower(), name_event.lower())
-                        #print(f"'{evento_especifico}' vs '{name_event}': {similaridad}%")                        
-                    #sys.exit()
-                    # Iterar sobre los eventos en v_list_eventos_LiveTV
+                        v_list_events_web_base.append({
+                            'name_event': name_event,
+                            'fecha_event_web': fecha_event_web
+                        })
                     for evento in v_list_eventos_LiveTV:
                         try:
                             name_event = evento.get('f06_name_event')
                             nombre_evento_base = name_event.replace('Vs', '–')
-                            #print(f"name_event: {name_event}")
-                            #debug
-                            #pdb.set_trace()                                  
-                            # Verificar si v_local y v_visita no estan en el texto de los td
-                            if all(fuzz.partial_ratio(nombre_evento_base.lower(), v_nombre_web.lower()) <= 80 for v_nombre_web in v_list_events_web_base):
-                            #if (nombre_evento_base.lower() not in name_event().lower() for name_event in v_list_events_web_base):
+                            fecha_event_base = evento.get('f03_dia_event')
+                            exists = any(
+                                fuzz.partial_ratio(nombre_evento_base.lower(), v_event['name_event'].lower()) > 80
+                                and fecha_event_base == v_event['fecha_event_web']
+                                for v_event in v_list_events_web_base
+                            )
+                            if not exists:
                                 document_id = evento.get('f01_id_document')
                                 proveedor = evento.get('f02_proveedor')
                                 if document_id and "LiveTV" in proveedor:
                                     try:
                                         t_eventos.delete_item(Key={"f01_id_document": document_id, "f02_proveedor": proveedor})
-                                        print(f"Se elimino de LiveTV el ID:{document_id} | evento: {name_event}")
+                                        print(f"Se elimino de LiveTV el ID: {document_id} | {fecha_event_base} | {name_event}")
                                     except Exception as e:
-                                        print(f"Ocurrio un error al eliminar el evento: {name_event} con el ID {document_id} | {e}")      
+                                        print(f"Ocurrio un error al eliminar el evento: {name_event} con el ID {document_id} | {e}")
                         except Exception as e:
                             print(f"Ocurrio un error en la eliminacion de eventos desde LiveTV: {name_event} con el nombre_evento_live {nombre_evento_base} | {e}")
 
-                    #sys.exit()
                     for td in td_elements[indice_nombre_evento + 1:]:
                         if contar_events_sin_links >= cantidad_reg_pasar:
                             #print(f'Se sale break: contar_events_sin_links:{contar_events_sin_links}')
-                            break                    
+                            break
                         tables_a = td.find_all('table', {'cellpadding': '1', 'cellspacing': '2', 'width': '100%'})
 
                         for table_a in tables_a:
                             span_evdesc = table_a.find('span', {'class': 'evdesc'})
-                            if span_evdesc:
-                                evdesc_text = span_evdesc.get_text(strip=True)
-                                hora_match = re.search(r'\b\d{1,2}:\d{2}\b', evdesc_text)
-                                if hora_match:
-                                    hora_event = hora_match.group()
-                                    hora_event_inicio = int(hora_event.split(':')[0].zfill(2))   # Asegura que siempre tenga dos caracteres
-                                    hora_event_inicio -= 6
-                                    hora_event_inicio %= 24
-                                    hora_event = str(hora_event_inicio).zfill(2) + ':' + hora_event[2:]
-                                    hora_event = hora_event.replace('::',':')                            
+                            span_evdesc = span_evdesc.get_text()
+                            lines = [line.strip() for line in span_evdesc.splitlines() if line.strip()]
+                            date_str, hora_event = lines[0].split(' at ')
+                            day = date_str.split()[0]
+                            month_str = date_str.split()[1]
+                            month = month_str_to_num(month_str)
+                            day = day.zfill(2)
+
+                            hour, minute = hora_event.split(':')
+                            hora_event = f"{hour.zfill(2)}:{minute}"
+                            # hora_event_inicio = int(hora_event.split(':')[0].zfill(2))   # Asegura que siempre tenga dos caracteres
+                            # # hora_event_inicio -= 6
+                            # hora_event_inicio %= 24
+                            dia_event = f"2024{month}{day}"
+
                             img_alt = table_a.find('img')['alt']
-                            event_categoria = img_alt               
+                            event_categoria = img_alt
                             aElement = table_a.select_one('a.live')
                             if aElement is None:
                                 continue
                             nameEventOld = aElement.text if aElement else ''
                             name_event = re.sub(r'\s+', ' ', re.sub(r'(?<=\s)[–](?=\s)', 'Vs', nameEventOld)).strip()
                             # if 'Auxerre' not in name_event:
-                            #     continue                                                            
+                            #     continue
                             img_src = table_a.find('img')['src']
-                            url_flag = img_src.lstrip('/') 
+                            url_flag = img_src.lstrip('/')
                             url_flag = f"https://{url_flag}"
 
+                            url_event = aElement['href']
+                            url_event = f'https://livetv.sx{url_event}'
+                            url_event =  validate_and_get_url(url_event)
 
-                            url_event = aElement['href']                        
-                            url_event = f'https://livetv.sx{url_event}'                        
-                            url_event =  validate_and_get_url(url_event)    
                             containsText = contains_not_available_text(url_event)
                             if containsText == 'SI':
                                 contar_events_sin_links = contar_events_sin_links + 1
@@ -1470,22 +1632,26 @@ while True:
                                 else:
                                     #print(f'Continua encontro sin sin_links name_event:{name_event}')
                                     continue
-                            dia_event = fecha_actual
 
-                            if contador_registros > 2 and hora_event_inicio > 18:
-                                eventNextDay = True
-                            # Verificar si eventNextDay es True y hora_event < 9
-                            if eventNextDay and hora_event_inicio < 9:
-                                # Incrementar dia_event en 1 dia
-                                dia_event = datetime.strptime(dia_event, '%Y%m%d')
-                                dia_event += timedelta(days=1)
-                                dia_event = dia_event.strftime('%Y%m%d')
+                            # if contador_registros > 2 and hora_event_inicio > 18:
+                            #     eventNextDay = True
+                            # # Verificar si eventNextDay es True y hora_event < 9
+                            # if eventNextDay and hora_event_inicio < 9:
+                            #     # Incrementar dia_event en 1 dia
+                            #     dia_event = datetime.strptime(dia_event, '%Y%m%d')
+                            #     dia_event += timedelta(days=1)
+                            #     dia_event = dia_event.strftime('%Y%m%d')
+
+                            fecha_hora = datetime.strptime(f"{dia_event} {hora_event}", '%Y%m%d %H:%M')
+                            fecha_hora -= timedelta(hours=6)
+                            hora_event = fecha_hora.strftime("%H:%M")
+                            fecha_hora = fecha_hora.strftime('%Y-%m-%d %H:%M')
 
                             headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36'}
                             responseL = requests.get(url_event, headers=headers, allow_redirects=True, verify=False)
-                        
+
                             document = BeautifulSoup(responseL.content, 'html.parser')
-                            imagesWithItemprop = document.select('img[itemprop]')    
+                            imagesWithItemprop = document.select('img[itemprop]')
                             if len(imagesWithItemprop) >= 2:
                                 logoLocalOld = imagesWithItemprop[0]['src'] if 'src' in imagesWithItemprop[0].attrs else ''
                                 logoVisitaOld = imagesWithItemprop[1]['src'] if 'src' in imagesWithItemprop[1].attrs else ''
@@ -1499,13 +1665,14 @@ while True:
                                 logo_Visita = None
 
                             if contador_registros > 0:
-                                existeEvent = verificarExisteEvento(hora_event,name_event)
+                                #existeEvent = verificarExisteEvento(hora_event,name_event)
+                                existeEvent = verificarExisteEvento(fecha_hora,name_event)
                             if existeEvent == "No" or contador_registros == 0:
                                 contador_registros += 1
                                 evento = {
                                         "f01_id_document": contador_registros,
                                         "f02_proveedor" : "LiveTV",
-                                        "f03_dia_event" : None,
+                                        "f03_dia_event" : fecha_hora,
                                         'f04_hora_event': hora_event,
                                         'f05_event_categoria': event_categoria,
                                         'f06_name_event': name_event,
@@ -1517,7 +1684,7 @@ while True:
                                         }
                                 #v_list_eventos.append(evento)
                                 #print(f'Se adiciona evento nuevo desde LiveTV : {hora_event} |s {event_categoria} | {name_event}')
-                            
+
                             list_eventos_detalles = []   # Lista para almacenar la lista de eventos
                             list_eventos_detalles_existente = []   # Lista para almacenar la lista de eventos
                             # Obtener todas las tablas con clase "lnktbj"
@@ -1549,7 +1716,7 @@ while True:
                                     if urlFinal is None:
                                         continue
                                     if 'acestream://' in urlFinal:
-                                        channel_name = "Acestream" 
+                                        channel_name = "Acestream"
 
                                     if existeEvent == "No":
                                         detalle = {
@@ -1565,13 +1732,13 @@ while True:
                                             #print(f'Ya existe Url para evento desde LiveTV : {hora_event} | {name_event} | {urlFinal}')
                                             continue
                                         else:
-                                            evento_existente = next((evento for evento in v_list_eventos + v_list_eventos_3 if evento.get("f01_id_document") == existeEvent), None)                                                                
+                                            evento_existente = next((evento for evento in v_list_eventos + v_list_eventos_3 if evento.get("f01_id_document") == existeEvent), None)
                                             if evento_existente:
-                                                proveedor = evento_existente['f02_proveedor']                                                                                                              
+                                                proveedor = evento_existente['f02_proveedor']
                                                 if 'LiveTV' not in evento_existente['f02_proveedor']:
                                                     evento_existente['f02_proveedor'] += ' | LiveTV'
-                                                if evento_existente['f03_dia_event'] is None and dia_event is not None:
-                                                    evento_existente['f03_dia_event'] = dia_event
+                                                if evento_existente['f03_dia_event'] is None and fecha_hora is not None:
+                                                    evento_existente['f03_dia_event'] = fecha_hora
                                                 if url_flag is not None:
                                                     evento_existente['f07_URL_Flag'] = url_flag
                                                 if event_categoria is not None:
@@ -1597,21 +1764,24 @@ while True:
                                                 evento_existente['f20_Detalles_Evento'] = list_eventos_detalles_existente
                                                 if evento_existente in v_list_eventos:
                                                     v_list_eventos[v_list_eventos.index(evento_existente)] = evento_existente
-                                                    print(f'Se actualiza list_eventos desde LiveTV: ID:{existeEvent} | {hora_event} | {name_event} | {urlFinal} | {channel_name}')
+                                                    print(f'Se actualiza list_eventos desde LiveTV: '
+                                                          f'ID: {existeEvent} | {fecha_hora} | {hora_event} | {event_categoria} | {name_event} | {urlFinal} | {channel_name}')
                                                 else:
                                                     t_eventos.delete_item(Key={"f01_id_document": existeEvent, "f02_proveedor": proveedor})
-                                                    t_eventos.put_item(Item=evento_existente)            
-                                                    print(f'Se actualiza evento en BD desde LiveTV: ID:{existeEvent} | {hora_event} | {name_event} | {urlFinal} | {channel_name} | proveedor: {proveedor}')
-                                                
+                                                    t_eventos.put_item(Item=evento_existente)
+                                                    print(f'Se actualiza evento en BD desde LiveTV: '
+                                                          f'ID: {existeEvent} | {fecha_hora} | {hora_event} | {event_categoria} | {name_event} | {urlFinal} | {channel_name} | proveedor: {proveedor}')
+
                                     if existeEvent == "No":
                                         # Agregar la lista de detallesEvento al evento
                                         evento['f20_Detalles_Evento'] = list_eventos_detalles
                                         v_list_eventos.append(evento)
-                                        print(f'Se adiciona evento y detalles desde LiveTV : ID:{contador_registros} | {hora_event} | {name_event} | {urlFinal} | {channel_name}')
+                                        print(f'Se adiciona evento y detalles desde LiveTV : '
+                                              f'ID: {contador_registros} | {fecha_hora} | {hora_event} | {event_categoria} | {name_event} | {urlFinal} | {channel_name}')
 
                                     text_idiom = None
                                     channel_name = None
-                                    imagenIdiom = None 
+                                    imagenIdiom = None
                                     urlFinal = None
                             event_categoria = None
                             url_flag = None
@@ -1644,39 +1814,45 @@ while True:
             else:
                 #sys.exit()
                 try:
-                    for td in td_elements:                    
+                    for td in td_elements:
                         if contar_events_sin_links >= cantidad_reg_pasar:
-                            break                    
+                            break
                         tables_cellpadding = td.find_all('table', {'cellpadding': '1', 'cellspacing': '2', 'width': '100%'})
                         for table in tables_cellpadding:
                             span_evdesc = table.find('span', {'class': 'evdesc'})
-                            if span_evdesc:
-                                evdesc_text = span_evdesc.get_text(strip=True)
-                                hora_match = re.search(r'\b\d{1,2}:\d{2}\b', evdesc_text)
-                                if hora_match:
-                                    hora_event = hora_match.group()
-                                    hora_event_inicio = int(hora_event.split(':')[0].zfill(2))   # Asegura que siempre tenga dos caracteres
-                                    hora_event_inicio -= 6
-                                    hora_event_inicio %= 24
-                                    hora_event = str(hora_event_inicio).zfill(2) + ':' + hora_event[2:]
-                                    hora_event = hora_event.replace('::',':')                            
+                            span_evdesc = span_evdesc.get_text()
+                            lines = [line.strip() for line in span_evdesc.splitlines() if line.strip()]
+                            date_str, hora_event = lines[0].split(' at ')
+                            day = date_str.split()[0]
+                            month_str = date_str.split()[1]
+                            month = month_str_to_num(month_str)
+                            day = day.zfill(2)
+
+                            hour, minute = hora_event.split(':')
+                            hora_event = f"{hour.zfill(2)}:{minute}"
+                            # hora_event_inicio = int(hora_event.split(':')[0].zfill(2))   # Asegura que siempre tenga dos caracteres
+                            # # hora_event_inicio -= 6
+                            # hora_event_inicio %= 24
+                            dia_event = f"2024{month}{day}"
+
                             img_alt = table.find('img')['alt']
-                            event_categoria = img_alt               
+                            event_categoria = img_alt
                             aElement = table.select_one('a.live')
                             if aElement is None:
                                 continue
                             nameEventOld = aElement.text if aElement else ''
-                            name_event = re.sub(r'\s+', ' ', re.sub(r'(?<=\s)[–](?=\s)', 'Vs', nameEventOld)).strip()        
+                            name_event = re.sub(r'\s+', ' ', re.sub(r'(?<=\s)[–](?=\s)', 'Vs', nameEventOld)).strip()
                             # if 'Auxerre' not in name_event:
-                            #     continue                                                             
-                            
+                            #     continue
+
                             img_src = table.find('img')['src']
-                            url_flag = img_src.lstrip('/') 
+                            url_flag = img_src.lstrip('/')
                             url_flag = f"https://{url_flag}"
 
                             url_event = aElement['href']
-                            url_event = f'https://livetv.sx{url_event}'                        
-                            url_event =  validate_and_get_url(url_event)    
+                            url_event = f'https://livetv.sx{url_event}'
+                            url_event =  validate_and_get_url(url_event)
+
                             containsText = contains_not_available_text(url_event)
                             if containsText == 'SI':
                                 contar_events_sin_links = contar_events_sin_links + 1
@@ -1685,11 +1861,24 @@ while True:
                                 else:
                                     continue
 
+                            # if contador_registros > 2 and hora_event_inicio > 18:
+                            #     eventNextDay = True
+                            # # Verificar si eventNextDay es True y hora_event < 9
+                            # if eventNextDay and hora_event_inicio < 9:
+                            #     # Incrementar dia_event en 1 dia
+                            #     dia_event = datetime.strptime(dia_event, '%Y%m%d')
+                            #     dia_event += timedelta(days=1)
+                            #     dia_event = dia_event.strftime('%Y%m%d')
+
+                            fecha_hora = datetime.strptime(f"{dia_event} {hora_event}", '%Y%m%d %H:%M')
+                            fecha_hora -= timedelta(hours=6)
+                            hora_event = fecha_hora.strftime("%H:%M")
+                            fecha_hora = fecha_hora.strftime('%Y-%m-%d %H:%M')
+
                             headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36'}
                             responseL = requests.get(url_event, headers=headers, allow_redirects=True, verify=False)
-                        
                             document = BeautifulSoup(responseL.content, 'html.parser')
-                            imagesWithItemprop = document.select('img[itemprop]')    
+                            imagesWithItemprop = document.select('img[itemprop]')
 
                             if len(imagesWithItemprop) >= 2:
                                 logoLocalOld = imagesWithItemprop[0]['src'] if 'src' in imagesWithItemprop[0].attrs else ''
@@ -1704,13 +1893,14 @@ while True:
                                 logo_Visita = None
 
                             if contador_registros > 0:
-                                existeEvent = verificarExisteEvento(hora_event,name_event)
+                                #existeEvent = verificarExisteEvento(hora_event,name_event)
+                                existeEvent = verificarExisteEvento(fecha_hora,name_event)
                             if existeEvent == "No" or contador_registros == 0:
                                 contador_registros += 1
                                 evento = {
                                         "f01_id_document": contador_registros,
                                         "f02_proveedor" : "LiveTV",
-                                        "f03_dia_event" : None,
+                                        "f03_dia_event" : fecha_hora,
                                         'f04_hora_event': hora_event,
                                         'f05_event_categoria': event_categoria,
                                         'f06_name_event': name_event,
@@ -1751,7 +1941,7 @@ while True:
                                     if urlFinal is None:
                                         continue
                                     if 'acestream://' in urlFinal:
-                                        channel_name = "Acestream"        
+                                        channel_name = "Acestream"
                                     if existeEvent == "No":
                                         detalle = {
                                                     'f21_imagen_Idiom': imagenIdiom,
@@ -1766,13 +1956,13 @@ while True:
                                             #print(f'Ya existe Url para evento desde LiveTV : {hora_event} | {name_event} | {urlFinal}')
                                             continue
                                         else:
-                                            evento_existente = next((evento for evento in v_list_eventos + v_list_eventos_3 if evento.get("f01_id_document") == existeEvent), None)                                                                
+                                            evento_existente = next((evento for evento in v_list_eventos + v_list_eventos_3 if evento.get("f01_id_document") == existeEvent), None)
                                             if evento_existente:
-                                                proveedor = evento_existente['f02_proveedor']                                                                                                              
+                                                proveedor = evento_existente['f02_proveedor']
                                                 if 'LiveTV' not in evento_existente['f02_proveedor']:
                                                     evento_existente['f02_proveedor'] += ' | LiveTV'
-                                                if evento_existente['f03_dia_event'] is None and dia_event is not None:
-                                                    evento_existente['f03_dia_event'] = dia_event
+                                                if evento_existente['f03_dia_event'] is None and fecha_hora is not None:
+                                                    evento_existente['f03_dia_event'] = fecha_hora
                                                 if url_flag is not None:
                                                     evento_existente['f07_URL_Flag'] = url_flag
                                                 if event_categoria is not None:
@@ -1798,21 +1988,23 @@ while True:
                                                 evento_existente['f20_Detalles_Evento'] = list_eventos_detalles_existente
                                                 if evento_existente in v_list_eventos:
                                                     v_list_eventos[v_list_eventos.index(evento_existente)] = evento_existente
-                                                    print(f'Se actualiza list_eventos desde LiveTV: ID:{existeEvent} | {hora_event} | {name_event} | {urlFinal} | {channel_name}')
+                                                    print(f'Se actualiza list_eventos desde LiveTV: '
+                                                          f'ID: {existeEvent} | {fecha_hora} | {hora_event} | {event_categoria} | {name_event} | {urlFinal} | {channel_name}')
                                                 else:
                                                     t_eventos.delete_item(Key={"f01_id_document": existeEvent, "f02_proveedor": proveedor})
-                                                    t_eventos.put_item(Item=evento_existente)            
-                                                    print(f'Se actualiza evento en BD desde LiveTV: ID:{existeEvent} | {hora_event} | {name_event} | {urlFinal} | {channel_name} | proveedor: {proveedor}')
-                                                
+                                                    t_eventos.put_item(Item=evento_existente)
+                                                    print(f'Se actualiza evento en BD desde LiveTV: '
+                                                          f'ID: {existeEvent} | {fecha_hora} | {hora_event} | {event_categoria} | {name_event} | {urlFinal} | {channel_name} | proveedor: {proveedor}')
                                     if existeEvent == "No":
                                         # Agregar la lista de detallesEvento al evento
                                         evento['f20_Detalles_Evento'] = list_eventos_detalles
                                         v_list_eventos.append(evento)
-                                        print(f'Se adiciona evento y detalles desde LiveTV: ID:{contador_registros} | {hora_event} | {name_event} | {urlFinal} | {channel_name}')
+                                        print(f'Se adiciona evento y detalles desde LiveTV: '
+                                              f'ID: {contador_registros} | {fecha_hora} | {hora_event} | {event_categoria} | {name_event} | {urlFinal} | {channel_name}')
 
                                     text_idiom = None
                                     channel_name = None
-                                    imagenIdiom = None 
+                                    imagenIdiom = None
                                     urlFinal = None
                             name_event = None
                             hora_event = None
@@ -1841,10 +2033,10 @@ while True:
 
                     # Si el dealer no existe, se agrega a la lista
                     if not dealer_exists:
-                        vListDealers.append(dealerLiveTV)   
-                            
+                        vListDealers.append(dealerLiveTV)
+
                         #continue
-            
+
             # Datos del nuevo dealer
             dealerLiveTV = {
                 "f01_id_dealer": 1,
@@ -1889,6 +2081,7 @@ while True:
     def procesar_SportsLine():
         print(f"Inicia procesar_SportsLine")
         global eventNextDay
+        global fecha_event
         global event_categoria
         global url_flag
         global jug_Local
@@ -1942,123 +2135,141 @@ while True:
                             idioma = line[4:].strip().capitalize()
                             idiomas.append({'extension': extension, 'idioma': idioma})
                             continue
-                        if "sportsonline.si/channels/" in line:
+                        if "/channels/" in line:
                             parts = line.split("|")
                             if len(parts) > 1:
-                                    try:
-                                        name_event = parts[0].strip().encode('latin1').decode('latin1')
-                                    except Exception as e:
-                                        name_event = parts[0].strip()
-                                    dia_event = fecha_actual
-                                        # Obtener la hora en formato de 24 horas
-                                    hora_event = name_event[:5]
-                                    hora_event_inicio = int(hora_event[:2])
-                                    hora_event_inicio -= 6
-                                    hora_event_inicio %= 24
-                                    hora_event = str(hora_event_inicio).zfill(2) + hora_event[2:]
-                                    name_event = name_event[5:].lstrip()
-                                    name_event = name_event.replace(" x ", " Vs ")
-                                    name_event = name_event.replace(" @ ", " Vs ")
-                                    name_event = process_special_characters(name_event)
-                                    # if 'Auxerre' not in name_event:
-                                    #     continue                                    
-                                
-                                    urlFinal = parts[1].strip()
-                                        # Verifica si alguna extension de idioma esta en la urlFinal
-                                    for idioma_info in idiomas:
-                                        extension_idioma = idioma_info['extension']
-                                        if extension_idioma.lower() in urlFinal.lower():
-                                            text_idiom = idioma_info['idioma']
-                                            break   # Una vez que encuentras una coincidencia, sales del bucle
-                                    if "/pt/" in urlFinal:
-                                        text_idiom = "Portuguese"
-                                    if contador_registros > 2 and hora_event_inicio > 18:
-                                        eventNextDay = True
-                                        # Verificar si eventNextDay es True y hora_event < 9
-                                    if eventNextDay and hora_event_inicio < 9:
-                                            # Incrementar dia_event en 1 dia
-                                        dia_event = datetime.strptime(dia_event, '%Y%m%d')
-                                        dia_event += timedelta(days=1)
-                                        dia_event = dia_event.strftime('%Y%m%d')
-                                    list_eventos_detalles = []   # Lista para almacenar la lista de eventos
-                                    list_eventos_detalles_existente = []   # Lista para almacenar la lista de eventos
-                                    if contador_registros > 0:
-                                        existeEvent = verificarExisteEvento(hora_event,name_event)
-                                    if existeEvent == "No" or contador_registros == 0:
-                                        contador_registros += 1
-                                        eventoSportLine = {
-                                                            "f01_id_document": contador_registros,
-                                                            "f02_proveedor" : "Sportline",
-                                                            "f03_dia_event" : dia_event,
-                                                            'f04_hora_event': hora_event,
-                                                            'f05_event_categoria': event_categoria,
-                                                            'f06_name_event': name_event,
-                                                            'f07_URL_Flag': url_flag,
-                                                            'f08_jug_Local': jug_Local,
-                                                            'f09_logo_Local': logo_Local,
-                                                            'f10_jug_Visita': jug_Visita,
-                                                            'f11_logo_Visita': logo_Visita
-                                                            }
-                                        detalleSportLine = {
-                                                            'f21_imagen_Idiom': imagenIdiom,
-                                                            'f22_opcion_Watch': channel_name,
-                                                            'f23_text_Idiom': text_idiom,
-                                                            'f24_url_Final': urlFinal
-                                                            }
-                                        list_eventos_detalles.append(detalleSportLine)
-                                            # Agregar la lista de detallesEvento al evento
-                                        eventoSportLine['f20_Detalles_Evento'] = list_eventos_detalles
-                                        v_list_eventos.append(eventoSportLine)
-                                        print(f'Se adiciona evento y detalles desde SportLine: ID:{contador_registros} | {hora_event} | {name_event} | {urlFinal} | {channel_name}')
-                                        bool_estado_Sportline = True
-                                        event_categoria = None
-                                        url_flag = None
-                                        jug_Local = None
-                                        logo_Local = None
-                                        jug_Visita = None
-                                        logo_Visita = None
+                                try:
+                                    name_event = parts[0].strip().encode('latin1').decode('latin1')
+                                except Exception as e:
+                                    name_event = parts[0].strip()
+                                fecha_hora = None
+                                dia_event = fecha_actual
+                                 # Obtener la hora en formato de 24 horas
+                                hora_event = name_event[:5]
+                                hora_event_inicio = int(hora_event[:2])
+                                #hora_event_inicio -= 6
+                                hora_event_inicio %= 24
+                                hora_event = str(hora_event_inicio).zfill(2) + hora_event[2:]
+
+                                name_event = name_event[5:].lstrip()
+                                name_event = name_event.replace(" x ", " Vs ")
+                                name_event = name_event.replace(" @ ", " Vs ")
+                                name_event = process_special_characters(name_event)
+                                # if 'Auxerre' not in name_event:
+                                #     continue
+
+                                urlFinal = parts[1].strip()
+                                    # Verifica si alguna extension de idioma esta en la urlFinal
+                                for idioma_info in idiomas:
+                                    extension_idioma = idioma_info['extension']
+                                    if extension_idioma.lower() in urlFinal.lower():
+                                        text_idiom = idioma_info['idioma']
+                                        break   # Una vez que encuentras una coincidencia, sales del bucle
+                                if "/pt/" in urlFinal:
+                                    text_idiom = "Portuguese"
+
+                                if contador_registros > 2 and hora_event_inicio > 18:
+                                    eventNextDay = True
+                                if eventNextDay and hora_event_inicio < 9:
+                                    dia_event = datetime.strptime(dia_event, '%Y%m%d')
+                                    dia_event += timedelta(days=1)
+                                    dia_event = dia_event.strftime('%Y%m%d')
+
+                                fecha_hora = datetime.strptime(f"{dia_event} {hora_event}", '%Y%m%d %H:%M')
+                                fecha_hora -= timedelta(hours=6)
+                                hora_event = fecha_hora.strftime("%H:%M")
+                                fecha_hora = fecha_hora.strftime('%Y-%m-%d %H:%M')
+
+                                list_eventos_detalles = []   # Lista para almacenar la lista de eventos
+                                list_eventos_detalles_existente = []   # Lista para almacenar la lista de eventos
+                                if contador_registros > 0:
+                                    #existeEvent = verificarExisteEvento(hora_event,name_event)
+                                    existeEvent = verificarExisteEvento(fecha_hora,name_event)
+                                if existeEvent == "No" or contador_registros == 0:
+                                    contador_registros += 1
+                                    eventoSportLine = {
+                                                        "f01_id_document": contador_registros,
+                                                        "f02_proveedor" : "Sportline",
+                                                        "f03_dia_event" : fecha_hora,
+                                                        'f04_hora_event': hora_event,
+                                                        'f05_event_categoria': event_categoria,
+                                                        'f06_name_event': name_event,
+                                                        'f07_URL_Flag': url_flag,
+                                                        'f08_jug_Local': jug_Local,
+                                                        'f09_logo_Local': logo_Local,
+                                                        'f10_jug_Visita': jug_Visita,
+                                                        'f11_logo_Visita': logo_Visita
+                                                        }
+                                    detalleSportLine = {
+                                                        'f21_imagen_Idiom': imagenIdiom,
+                                                        'f22_opcion_Watch': channel_name,
+                                                        'f23_text_Idiom': text_idiom,
+                                                        'f24_url_Final': urlFinal
+                                                        }
+                                    list_eventos_detalles.append(detalleSportLine)
+                                        # Agregar la lista de detallesEvento al evento
+                                    eventoSportLine['f20_Detalles_Evento'] = list_eventos_detalles
+                                    v_list_eventos.append(eventoSportLine)
+                                    print(f'Se adiciona evento y detalles desde SportLine: '
+                                          f'ID: {contador_registros} | {fecha_hora} | {hora_event} | {event_categoria} | {name_event} | {urlFinal} | {channel_name}')
+                                    #v_message = (f'{hora_event} | {name_event} | {urlFinal} | {channel_name}')
+                                    #asyncio.run(enviar_mensaje_telegram_channel(v_message))
+                                    bool_estado_Sportline = True
+                                    event_categoria = None
+                                    url_flag = None
+                                    jug_Local = None
+                                    logo_Local = None
+                                    jug_Visita = None
+                                    logo_Visita = None
+                                    channel_name = None
+                                    imagenIdiom = None
+                                    text_idiom = None
+                                else:
+                                    existeUrlEvent = None
+                                    existeUrlEvent = verificarExisteUrlEvento(existeEvent, urlFinal)
+                                    if existeUrlEvent == "Si_Existe_Url":
+                                        # print(f'Ya existe Url para evento desde Sportline : {hora_event} | {name_event} | {urlFinal}')
+                                        continue
+                                    else:
+                                        evento_existente = next((evento for evento in v_list_eventos + v_list_eventos_3 if evento.get("f01_id_document") == existeEvent), None)
+                                        if evento_existente:
+                                            proveedor = evento_existente['f02_proveedor']
+                                            if 'Sportline' not in evento_existente['f02_proveedor']:
+                                                evento_existente['f02_proveedor'] += ' | Sportline'
+                                            if evento_existente['f03_dia_event'] is None and fecha_hora is not None:
+                                                evento_existente['f03_dia_event'] = fecha_hora
+                                            list_eventos_detalles_existente = evento_existente.get("f20_Detalles_Evento", [])
+                                            detalle = {
+                                                        'f21_imagen_Idiom': imagenIdiom,
+                                                        'f22_opcion_Watch': channel_name,
+                                                        'f23_text_Idiom': text_idiom,
+                                                        'f24_url_Final': urlFinal
+                                                        }
+                                            # Agregar detalle al evento existente
+                                            list_eventos_detalles_existente.append(detalle)
+                                            evento_existente['f20_Detalles_Evento'] = list_eventos_detalles_existente
+                                            if evento_existente in v_list_eventos:
+                                                v_list_eventos[v_list_eventos.index(evento_existente)] = evento_existente
+                                                print(f'Se actualiza list_eventos desde Sportline: '
+                                                      f'ID: {existeEvent} | {fecha_hora} | {hora_event} | {event_categoria} | {name_event} | {urlFinal} | {channel_name}')
+                                                # v_message = (f'{hora_event} | {name_event} | {urlFinal} | {channel_name}')
+                                                # asyncio.run(enviar_mensaje_telegram_channel(v_message))
+                                            else:
+                                                t_eventos.delete_item(Key={"f01_id_document": existeEvent, "f02_proveedor": proveedor})
+                                                t_eventos.put_item(Item=evento_existente)
+                                                print(f'Se actualiza evento en BD desde Sportline: '
+                                                      f'ID: {existeEvent} | {fecha_hora} | {hora_event} | {event_categoria} | {name_event} | {urlFinal} | {channel_name} | proveedor: {proveedor}')
+
+                                                # v_message = (f'{hora_event} | {name_event} | {urlFinal} | {channel_name}')
+                                                # asyncio.run(enviar_mensaje_telegram_channel(v_message))
                                         channel_name = None
                                         imagenIdiom = None
                                         text_idiom = None
-                                    else:
-                                        existeUrlEvent = None
-                                        existeUrlEvent = verificarExisteUrlEvento(existeEvent, urlFinal)
-                                        if existeUrlEvent == "Si_Existe_Url":
-                                            #print(f'Ya existe Url para evento desde Sportline : {hora_event} | {name_event} | {urlFinal}')
-                                            continue
-                                        else:
-                                            evento_existente = next((evento for evento in v_list_eventos + v_list_eventos_3 if evento.get("f01_id_document") == existeEvent), None)                                                                
-                                            if evento_existente:
-                                                proveedor = evento_existente['f02_proveedor']
-                                                if 'Sportline' not in evento_existente['f02_proveedor']:
-                                                    evento_existente['f02_proveedor'] += ' | Sportline'
-                                                if evento_existente['f03_dia_event'] is None and dia_event is not None:
-                                                    evento_existente['f03_dia_event'] = dia_event
-                                                list_eventos_detalles_existente = evento_existente.get("f20_Detalles_Evento", [])
-                                                detalle = {
-                                                            'f21_imagen_Idiom': imagenIdiom,
-                                                            'f22_opcion_Watch': channel_name,
-                                                            'f23_text_Idiom': text_idiom,
-                                                            'f24_url_Final': urlFinal
-                                                            }
-                                                # Agregar detalle al evento existente
-                                                list_eventos_detalles_existente.append(detalle)
-                                                evento_existente['f20_Detalles_Evento'] = list_eventos_detalles_existente
-                                                if evento_existente in v_list_eventos:                                                    
-                                                    v_list_eventos[v_list_eventos.index(evento_existente)] = evento_existente           
-                                                    print(f'Se actualiza list_eventos desde Sportline: ID:{existeEvent} | {hora_event} | {name_event} | {urlFinal} | {channel_name}')                                                             
-                                                else:
-                                                    t_eventos.delete_item(Key={"f01_id_document": existeEvent, "f02_proveedor": proveedor})
-                                                    t_eventos.put_item(Item=evento_existente)
-                                                    print(f'Se actualiza evento en BD desde Sportline: ID:{existeEvent} | {hora_event} | {name_event} | {urlFinal} | {channel_name} | proveedor: {proveedor}')
-                                            channel_name = None
-                                            imagenIdiom = None
-                                            text_idiom = None
                 except Exception as e:
                     print(f'Error en procesar_Sportline: {e}')
                     bool_estado_Sportline = False
-                        
-                    continue                            
+
+                    continue
             # Datos del nuevo dealer
             dealerSportLine = {
                 "f01_id_dealer": 2,
@@ -2076,8 +2287,8 @@ while True:
 
             # Si el dealer no existe, se agrega a la lista
             if not dealer_exists:
-                vListDealers.append(dealerSportLine)           
-            
+                vListDealers.append(dealerSportLine)
+
             print(f"Termina procesar_SportsLine")
         except Exception as e:
             print(f'Error en procesar_SportsLine: {e}')
@@ -2098,8 +2309,8 @@ while True:
 
             # Si el dealer no existe, se agrega a la lista
             if not dealer_exists:
-                vListDealers.append(dealerSportLine)   
-        
+                vListDealers.append(dealerSportLine)
+
     def procesar_DirectatvHDme():
         print(f"Inicia procesar_DirectatvHDme")
         global eventNextDay
@@ -2113,9 +2324,9 @@ while True:
         global imagenIdiom
         global text_idiom
         global existeEvent
-        global contador_registros    
+        global contador_registros
         try:
-            global bool_estado_DirectatvHDme 
+            global bool_estado_DirectatvHDme
             dia_event = None
             hora_event = None
             event_categoria = None
@@ -2135,8 +2346,8 @@ while True:
              # Realizar la solicitud GET a la URL y obtener el contenido HTML
              #responseDirecTVHDme = requests.get(urlDirectatvHDme)
             headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36'}
-            responseDirecTVHDme = requests.get(urlDirectatvHDme, headers=headers, allow_redirects=True, verify=False)            
-            
+            responseDirecTVHDme = requests.get(urlDirectatvHDme, headers=headers, allow_redirects=True, verify=False)
+
             soup = BeautifulSoup(responseDirecTVHDme.text, 'html.parser')
 
                 # Obtener todos los elementos <tr>
@@ -2151,6 +2362,7 @@ while True:
                     td_elements = tr_element.find_all('td')
 
                     if len(td_elements) >= 3:
+                        fecha_hora = None
                         hora = td_elements[0].find(class_='t').text if td_elements[0].find(class_='t') else ''
                         url_flag = td_elements[1].find('img')['src'] if td_elements[1].find('img') else ''
                         a_element = td_elements[2].find('a')
@@ -2165,7 +2377,7 @@ while True:
                             name_event = text_event
                         name_event = process_special_characters(name_event)
                         # if 'Auxerre' not in name_event:
-                        #     continue    
+                        #     continue
 
                         enlace = enlace.strip().replace(' ', '%20')
                         enlace = re.sub(r'(.*)\.php\.php$', r'\1.php', enlace)
@@ -2188,7 +2400,8 @@ while True:
                         #hora_event_inicio -= 1
                         hora_event_inicio %= 24
                         hora_event = str(hora_event_inicio).zfill(2) + hora[2:]
-                        hora_event = hora_event.replace("AM", "").replace("PM", "")                
+                        hora_event = hora_event.replace("AM", "").replace("PM", "")
+
                         urlFinChannel = obtenerUrlFinalRojaHDme(enlaceallorigins)
 
                         if '404' in urlFinChannel:
@@ -2202,7 +2415,6 @@ while True:
 
                         if contador_registros > 2 and hora_event_inicio > 18:
                             eventNextDay = True
-
                             # Verificar si eventNextDay es True y hora_event < 9
                         if eventNextDay and hora_event_inicio < 9:
                                 # Incrementar dia_event en 1 dia
@@ -2210,18 +2422,23 @@ while True:
                             dia_event += timedelta(days=1)
                             dia_event = dia_event.strftime('%Y%m%d')
 
+                        fecha_hora = datetime.strptime(f"{dia_event} {hora_event}", '%Y%m%d %H:%M')
+                        #fecha_hora -= timedelta(hours=1)
+                        hora_event = fecha_hora.strftime("%H:%M")
+                        fecha_hora = fecha_hora.strftime('%Y-%m-%d %H:%M')
 
                         list_eventos_detalles = []   # Lista para almacenar la lista de eventos
                         list_eventos_detalles_existente = []   # Lista para almacenar la lista de eventos
                         if contador_registros > 0:
-                            existeEvent = verificarExisteEvento(hora_event,name_event)
+                            #existeEvent = verificarExisteEvento(hora_event,name_event)
+                            existeEvent = verificarExisteEvento(fecha_hora,name_event)
 
                         if existeEvent == "No" or contador_registros == 0:
                             contador_registros += 1
                             evento = {
                                     "f01_id_document": contador_registros,
                                     "f02_proveedor" : "DirectatvHDme",
-                                    "f03_dia_event" : dia_event,
+                                    "f03_dia_event" : fecha_hora,
                                     'f04_hora_event': hora_event,
                                     'f05_event_categoria': event_categoria,
                                     'f06_name_event': name_event,
@@ -2241,7 +2458,8 @@ while True:
                                     # Agregar la lista de detallesEvento al evento
                             evento['f20_Detalles_Evento'] = list_eventos_detalles
                             v_list_eventos.append(evento)
-                            print(f'Se adiciona evento y detalles desde DirectatvHDme: ID:{contador_registros} | {hora_event} | {name_event} | {urlFinal} | {channel_name}')
+                            print(f'Se adiciona evento y detalles desde DirectatvHDme: '
+                                  f'ID: {contador_registros} | {fecha_hora} | {hora_event} | {event_categoria} | {name_event} | {urlFinal} | {channel_name}')
                             bool_estado_DirectatvHDme = True
                             event_categoria = None
                             url_flag = None
@@ -2260,15 +2478,15 @@ while True:
                                 #print(f'Ya existe Url para evento desde DirectatvHDme : {hora_event} | {name_event} | {urlFinal}')
                                 continue
                             else:
-                                evento_existente = next((evento for evento in v_list_eventos + v_list_eventos_3 if evento.get("f01_id_document") == existeEvent), None)                                                                
-                                if evento_existente:     
-                                    proveedor = evento_existente['f02_proveedor']                                                                                                              
+                                evento_existente = next((evento for evento in v_list_eventos + v_list_eventos_3 if evento.get("f01_id_document") == existeEvent), None)
+                                if evento_existente:
+                                    proveedor = evento_existente['f02_proveedor']
                                     if 'DirectatvHDme' not in evento_existente['f02_proveedor']:
                                         evento_existente['f02_proveedor'] += ' | DirectatvHDme'
-                                    if evento_existente['f03_dia_event'] is None and dia_event is not None:
-                                        evento_existente['f03_dia_event'] = dia_event                                        
+                                    if evento_existente['f03_dia_event'] is None and fecha_hora is not None:
+                                        evento_existente['f03_dia_event'] = fecha_hora
                                     if evento_existente['f07_URL_Flag'] is None and url_flag is not None:
-                                        evento_existente['f07_URL_Flag'] = url_flag  
+                                        evento_existente['f07_URL_Flag'] = url_flag
                                     if evento_existente['f05_event_categoria'] is None and event_categoria is not None:
                                         evento_existente['f05_event_categoria'] = event_categoria
 
@@ -2284,19 +2502,22 @@ while True:
                                     evento_existente['f20_Detalles_Evento'] = list_eventos_detalles_existente
                                     if evento_existente in v_list_eventos:
                                         v_list_eventos[v_list_eventos.index(evento_existente)] = evento_existente
-                                        print(f'Se actualiza list_eventos desde DirectatvHDme: ID:{existeEvent} | {hora_event} | {name_event} | {urlFinal} | {channel_name}')
+                                        print(f'Se actualiza list_eventos desde DirectatvHDme: '
+                                              f'ID: {existeEvent} | {fecha_hora} | {hora_event} | {event_categoria} | {name_event} | {urlFinal} | {channel_name}')
                                     else:
                                         t_eventos.delete_item(Key={"f01_id_document": existeEvent, "f02_proveedor": proveedor})
                                         t_eventos.put_item(Item=evento_existente)
-                                        print(f'Se actualiza evento en BD desde DirectatvHDme: ID:{existeEvent} | {hora_event} | {name_event} | {urlFinal} | {channel_name} | proveedor: {proveedor}')
+                                        print(f'Se actualiza evento en BD desde DirectatvHDme: '
+                                              f'ID: {existeEvent} | {fecha_hora} | {hora_event} | {event_categoria} | {name_event} | {urlFinal} | {channel_name} | proveedor: {proveedor}')
+
                                 channel_name = None
                                 imagenIdiom = None
                                 text_idiom = None
                 except Exception as e:
                     print(f'Error en procesar_DirectatvHDme: {e}')
                     bool_estado_DirectatvHDme = False
-                
-                    continue                
+
+                    continue
             # Datos del nuevo dealer
             dealerDirectatvHDme = {
                 "f01_id_dealer": 3,
@@ -2314,9 +2535,9 @@ while True:
 
             # Si el dealer no existe, se agrega a la lista
             if not dealer_exists:
-                vListDealers.append(dealerDirectatvHDme) 
-            
-            print(f"Termina procesar_DirectatvHDme")    
+                vListDealers.append(dealerDirectatvHDme)
+
+            print(f"Termina procesar_DirectatvHDme")
         except Exception as e:
             print(f'Error en procesar_DirectatvHDme: {e}')
             # Datos del nuevo dealer
@@ -2336,7 +2557,7 @@ while True:
 
             # Si el dealer no existe, se agrega a la lista
             if not dealer_exists:
-                vListDealers.append(dealerDirectatvHDme) 
+                vListDealers.append(dealerDirectatvHDme)
 
     def procesar_LibreF():
         print(f"Inicia procesar_LibreF")
@@ -2351,11 +2572,11 @@ while True:
         global imagenIdiom
         global text_idiom
         global existeEvent
-        global contador_registros    
+        global contador_registros
         global bool_estado_libref
         global ind_miss_LibreF
         global currentDayOfWeek
-   
+
         try:
             dia_event = None
             hora_event = None
@@ -2374,11 +2595,11 @@ while True:
             urlInicial = None
 
             evento = {}
-                    
+
             headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36'}
             response = requests.get(urlLibreF, headers=headers, allow_redirects=True, verify=False)
             response.encoding = 'utf-8'
-            soup = BeautifulSoup(response.text, 'html.parser')          
+            soup = BeautifulSoup(response.text, 'html.parser')
 
             b_tag = soup.find('b')
 
@@ -2389,12 +2610,12 @@ while True:
                 first_word_spanish = date_text.split()[0]
                 dia_sin_acentos = unidecode(first_word_spanish)
                 dia_ingles = dias_traducidos.get(dia_sin_acentos, "Unknown day")
-            
+
             if dia_ingles == currentDayOfWeek:
                 eventos = soup.find_all('li')
                 if ind_miss_LibreF == 0:
                     for evento in eventos:
-                        try:                        
+                        try:
                             linkElement = evento.find('a')
                             linkText = linkElement.text if linkElement else ''
                             firstColonIndex = linkText.find(':')
@@ -2414,13 +2635,15 @@ while True:
                             name_event = name_event.replace("vs.", "Vs").strip()
                             name_event = process_special_characters(name_event)
                             # if 'Cali' not in name_event:
-                            #     continue  
+                            #     continue
                             hora_evento = evento.find(class_='t').text if evento.find(class_='t') else ''
                                 # Obtener todos los elementos de tipo <li> que son hijos de evento
                             canalesYEnlaces = evento.select('ul > li.subitem1')
+
                                 # Recorrer cada <li> hijo para obtener los canales y enlaces
                             for ce in canalesYEnlaces:
                                 try:
+                                    fecha_hora = None
                                     hora_event_inicio = None
                                     chanel = ce.find('a').contents[0] if ce.find('a') else ''
                                     #enlace = '/es' + ce.find('a')['href'] if ce.find('a') else ''
@@ -2438,12 +2661,13 @@ while True:
                                     if "/embed/" not in urlcors:
                                         urlIni = obtenerUrlFinalLibreTV(urlcors)
                                     else:
-                                        urlIni = obtenerUrlFinalLibreTVSelenium(urlcors)                              
+                                        urlIni = obtenerUrlFinalLibreTVSelenium(urlcors)
                                     dia_event = fecha_actual
                                     hora_event_inicio = int(hora_evento[:2])
-                                    hora_event_inicio -= 6
+                                    # hora_event_inicio -= 6
                                     hora_event_inicio %= 24
                                     hora_event = str(hora_event_inicio).zfill(2) + hora_evento[2:]
+
                                     if contador_registros > 2 and hora_event_inicio > 18:
                                         eventNextDay = True
                                         # Verificar si eventNextDay es True y hora_event < 9
@@ -2452,6 +2676,11 @@ while True:
                                         dia_event = datetime.strptime(dia_event, '%Y%m%d')
                                         dia_event += timedelta(days=1)
                                         dia_event = dia_event.strftime('%Y%m%d')
+
+                                    fecha_hora = datetime.strptime(f"{dia_event} {hora_event}", '%Y%m%d %H:%M')
+                                    fecha_hora -= timedelta(hours=6)
+                                    hora_event = fecha_hora.strftime("%H:%M")
+                                    fecha_hora = fecha_hora.strftime('%Y-%m-%d %H:%M')
                                     # : sin_data
                                     if urlIni is None:
                                         bool_estado_libref = False
@@ -2464,13 +2693,14 @@ while True:
                                             channel = channel + ' | sin_data'
 
                                     if contador_registros > 0:
-                                        existeEvent = verificarExisteEvento(hora_event,name_event)
+                                        #existeEvent = verificarExisteEvento(hora_event,name_event)
+                                        existeEvent = verificarExisteEvento(fecha_hora,name_event)
                                     if existeEvent == "No" or contador_registros == 0:
                                         contador_registros += 1
                                         eventoLibreF = {
                                                 "f01_id_document": contador_registros,
                                                 "f02_proveedor" : "LibreF",
-                                                "f03_dia_event" : dia_event,
+                                                "f03_dia_event" : fecha_hora,
                                                 'f04_hora_event': hora_event,
                                                 'f05_event_categoria': event_categoria,
                                                 'f06_name_event': name_event,
@@ -2491,8 +2721,8 @@ while True:
                                                 urlFinal = url_final_parts[i]
                                                 urlFinal = urlFinal.replace(" ","")
                                                 channel_name = channel + ': ' + url_final_parts[i + 1] if i + 1 < len(url_final_parts) else None
-                                                if urlFinal.startswith('/embed/'): 
-                                                    urlFinal = 'https://futbollibrehd.net' + urlFinal                                                
+                                                if urlFinal.startswith('/embed/'):
+                                                    urlFinal = 'https://futbollibrehd.net' + urlFinal
                                                 existeUrlEvent = None
                                                 if existeEvent == "No":
                                                     detalleLibreF = {
@@ -2502,7 +2732,8 @@ while True:
                                                                 'f24_url_Final': urlFinal
                                                                 }
                                                     list_eventos_detalles.append(detalleLibreF)
-                                                    print(f'Se adiciona evento y detalles desde LibreF: ID:{contador_registros} | {hora_event} | {name_event} | {urlFinal} | {channel_name}')
+                                                    print(f'Se adiciona evento y detalles desde LibreF: '
+                                                          f'ID: {contador_registros} | {fecha_hora} | {hora_event} | {event_categoria} | {name_event} | {urlFinal} | {channel_name}')
                                                     event_categoria = None
                                                     url_flag = None
                                                     jug_Local = None
@@ -2518,15 +2749,15 @@ while True:
                                                         #(f'Ya existe Url para evento desde LibreF : {hora_event} | {name_event} | {urlFinal} | {channel_name}')
                                                         continue
                                                     else:
-                                                        evento_existente = next((evento for evento in v_list_eventos + v_list_eventos_3 if evento.get("f01_id_document") == existeEvent), None)                                                                
-                                                        if evento_existente:     
-                                                            proveedor = evento_existente['f02_proveedor']                                                                                                              
+                                                        evento_existente = next((evento for evento in v_list_eventos + v_list_eventos_3 if evento.get("f01_id_document") == existeEvent), None)
+                                                        if evento_existente:
+                                                            proveedor = evento_existente['f02_proveedor']
                                                             if 'LibreF' not in evento_existente['f02_proveedor']:
                                                                 evento_existente['f02_proveedor'] += ' | LibreF'
-                                                            if evento_existente['f03_dia_event'] is None and dia_event is not None:
-                                                                evento_existente['f03_dia_event'] = dia_event                                                    
+                                                            if evento_existente['f03_dia_event'] is None and fecha_hora is not None:
+                                                                evento_existente['f03_dia_event'] = fecha_hora
                                                             if evento_existente['f07_URL_Flag'] is None and url_flag is not None:
-                                                                evento_existente['f07_URL_Flag'] = url_flag  
+                                                                evento_existente['f07_URL_Flag'] = url_flag
                                                             if evento_existente['f05_event_categoria'] is None and event_categoria is not None:
                                                                 evento_existente['f05_event_categoria'] = event_categoria
 
@@ -2541,28 +2772,31 @@ while True:
                                                             list_eventos_detalles_existente.append(detalle)
                                                             evento_existente['f20_Detalles_Evento'] = list_eventos_detalles_existente
                                                             if evento_existente in v_list_eventos:
-                                                                v_list_eventos[v_list_eventos.index(evento_existente)] = evento_existente                                                                        
-                                                                print(f'Se actualiza list_eventos desde LibreF: ID:{existeEvent} | {hora_event} | {name_event} | {urlFinal} | {channel_name}')
+                                                                v_list_eventos[v_list_eventos.index(evento_existente)] = evento_existente
+                                                                print(f'Se actualiza list_eventos desde LibreF: '
+                                                                      f'ID: {existeEvent} | {fecha_hora} | {hora_event} | {event_categoria} | {name_event} | {urlFinal} | {channel_name}')
                                                             #debug
-                                                            #pdb.set_trace()                                                            
+                                                            #pdb.set_trace()
                                                             else:
                                                                 t_eventos.delete_item(Key={"f01_id_document": existeEvent, "f02_proveedor": proveedor})
                                                                 t_eventos.put_item(Item=evento_existente)
-                                                                print(f'Se actualiza evento en BD desde LibreF: ID:{existeEvent} | {hora_event} | {name_event} | {urlFinal} | {channel_name} | proveedor: {proveedor}')
+                                                                print(f'Se actualiza evento en BD desde LibreF: '
+                                                                      f'ID: {existeEvent} | {fecha_hora} | {hora_event} | {event_categoria} | {name_event} | {urlFinal} | {channel_name} | proveedor: {proveedor}')
+
                                                 channel_name = None
                                                 imagenIdiom = None
                                                 text_idiom = None
-                                            except Exception as e:     
-                                                print(f"Error en procesar_libreF 1: {e}") 
+                                            except Exception as e:
+                                                print(f"Error en procesar_libreF 1: {e}")
                                                 bool_estado_libref = False
-                                                continue                                                   
+                                                continue
                                         if existeEvent == "No":
                                                 # Agregar la lista de detallesEvento al evento
                                             eventoLibreF['f20_Detalles_Evento'] = list_eventos_detalles
                                             v_list_eventos.append(eventoLibreF)
                                     else:  # if not ' | ' in urlIni:
                                         urlFinal = urlIni.replace(" ","")
-                                        if urlFinal.startswith('/embed/'): 
+                                        if urlFinal.startswith('/embed/'):
                                             urlFinal = 'https://futbollibrehd.net' + urlFinal
                                         existeUrlEvent = None
                                         if existeEvent == "No":
@@ -2575,7 +2809,8 @@ while True:
                                             list_eventos_detalles.append(detalleLibreF)
                                             eventoLibreF['f20_Detalles_Evento'] = list_eventos_detalles
                                             v_list_eventos.append(eventoLibreF)
-                                            print(f'Se adiciona evento y detalles desde LibreF: ID:{contador_registros} | {hora_event} | {name_event} | {urlFinal} | {channel}')
+                                            print(f'Se adiciona evento y detalles desde LibreF: '
+                                                  f'ID: {contador_registros} | {fecha_hora} | {hora_event} | {event_categoria} | {name_event} | {urlFinal} | {channel}')
                                             event_categoria = None
                                             url_flag = None
                                             jug_Local = None
@@ -2589,17 +2824,17 @@ while True:
                                             existeUrlEvent = verificarExisteUrlEvento(existeEvent, urlFinal)
                                             if existeUrlEvent == "Si_Existe_Url":
                                                 #print(f'Ya existe Url para evento desde LibreF : {hora_event} | {name_event} | {urlFinal} | {channel}')
-                                                continue 
+                                                continue
                                             else:
-                                                evento_existente = next((evento for evento in v_list_eventos + v_list_eventos_3 if evento.get("f01_id_document") == existeEvent), None)                                                                
-                                                if evento_existente:     
-                                                    proveedor = evento_existente['f02_proveedor']                                                                                                              
+                                                evento_existente = next((evento for evento in v_list_eventos + v_list_eventos_3 if evento.get("f01_id_document") == existeEvent), None)
+                                                if evento_existente:
+                                                    proveedor = evento_existente['f02_proveedor']
                                                     if 'LibreF' not in evento_existente['f02_proveedor']:
                                                         evento_existente['f02_proveedor'] += ' | LibreF'
-                                                    if evento_existente['f03_dia_event'] is None and dia_event is not None:
-                                                        evento_existente['f03_dia_event'] = dia_event                                                    
+                                                    if evento_existente['f03_dia_event'] is None and fecha_hora is not None:
+                                                        evento_existente['f03_dia_event'] = fecha_hora
                                                     if evento_existente['f07_URL_Flag'] is None and url_flag is not None:
-                                                        evento_existente['f07_URL_Flag'] = url_flag  
+                                                        evento_existente['f07_URL_Flag'] = url_flag
                                                     if evento_existente['f05_event_categoria'] is None and event_categoria is not None:
                                                         evento_existente['f05_event_categoria'] = event_categoria
 
@@ -2614,25 +2849,28 @@ while True:
                                                     list_eventos_detalles_existente.append(detalle)
                                                     evento_existente['f20_Detalles_Evento'] = list_eventos_detalles_existente
                                                     if evento_existente in v_list_eventos:
-                                                        v_list_eventos[v_list_eventos.index(evento_existente)] = evento_existente                                                                        
-                                                        print(f'Se actualiza list_eventos desde LibreF: ID:{existeEvent} | {hora_event} | {name_event} | {urlFinal} | {channel_name}')
+                                                        v_list_eventos[v_list_eventos.index(evento_existente)] = evento_existente
+                                                        print(f'Se actualiza list_eventos desde LibreF: '
+                                                              f'ID: {existeEvent} | {fecha_hora} | {hora_event} | {event_categoria} | {name_event} | {urlFinal} | {channel}')
                                                     #debug
-                                                    #pdb.set_trace()                                                      
+                                                    #pdb.set_trace()
                                                     else:
                                                         t_eventos.delete_item(Key={"f01_id_document": existeEvent, "f02_proveedor": proveedor})
-                                                        t_eventos.put_item(Item=evento_existente)                                            
-                                                        print(f'Se actualiza evento en BD desde LibreF: ID:{existeEvent} | {hora_event} | {name_event} | {urlFinal} | {channel_name} | proveedor: {proveedor}')
+                                                        t_eventos.put_item(Item=evento_existente)
+                                                        print(f'Se actualiza evento en BD desde LibreF: '
+                                                              f'ID: {existeEvent} | {fecha_hora} | {hora_event} | {event_categoria} | {name_event} | {urlFinal} | {channel}  | proveedor: {proveedor}')
+
                                                 channel = None
                                                 imagenIdiom = None
                                                 text_idiom = None
-                                except Exception as e:     
-                                    print(f"Error en procesar_libreF 2: {e}") 
+                                except Exception as e:
+                                    print(f"Error en procesar_libreF 2: {e}")
                                     bool_estado_libref = False
-                                    continue                                             
-                        except Exception as e:     
-                            print(f"Error en procesar_libreF 3: {e}") 
+                                    continue
+                        except Exception as e:
+                            print(f"Error en procesar_libreF 3: {e}")
                             bool_estado_libref = False
-                            continue              
+                            continue
                 else:
                     for event_index, events_miss in enumerate(v_list_eventos):
                         try:
@@ -2645,9 +2883,9 @@ while True:
                             eventoAbuscar = f"{name_event.replace('Vs', 'vs.')}"
                             for detalle_index, detalle_miss in enumerate(detalles_miss_evento):
                                 opcionWatch = detalle_miss.get('f22_opcion_Watch')
-                                if opcionWatch is not None and 'sin_data' in opcionWatch:                            
+                                if opcionWatch is not None and 'sin_data' in opcionWatch:
                                     if "|" in opcionWatch:
-                                        opcionWatch = opcionWatch.split("|")[0].strip()                            
+                                        opcionWatch = opcionWatch.split("|")[0].strip()
                                     eventoAbuscar = eventoAbuscar.replace(" vs ", " vs. ").strip()
                                     # Encontrar eventos con una similitud alta
                                     #matching_eventos = [evento_li for evento_li in eventos if eventoAbuscar in evento_li.text.encode('latin1').decode('utf8')]
@@ -2655,38 +2893,38 @@ while True:
                                     eventoAbuscar = eventoAbuscar.lower()
                                     #print(f"eventoAbuscar: {eventoAbuscar}")
                                     for evento_li in eventos:
-                                        
+
                                         linkElement = evento_li.find('a')
-                                        linkText = linkElement.text if linkElement else ''                                    
+                                        linkText = linkElement.text if linkElement else ''
                                         firstColonIndex = linkText.find(':')
                                         if firstColonIndex != -1:
                                             textEvent = linkText[firstColonIndex + 1:].split('\n')[0].strip()   # Obtener la primera linea
                                             #print(f"textEvent: {textEvent.lower()}")
                                         #texto_completo = evento_li.get_text()
                                         #name_event = next((line.strip() for line in texto_completo.splitlines() if line.strip()), '')
-                                        
+
                                         #if fuzz.partial_ratio(eventoAbuscar, name_event.lower()) >= 80:
                                             matching_eventos = [evento_li for evento_li in eventos if fuzz.partial_ratio(eventoAbuscar, textEvent.lower()) >= 75]
                                             if matching_eventos:
                                                 #print(f"matching_eventos: {matching_eventos}")
                                                 break
-                                                
+
                                     if not matching_eventos:
                                         continue
                                     enlace_opcionWatch = None
-                                    for evento_li in matching_eventos:                                
+                                    for evento_li in matching_eventos:
                                         links = evento_li.find_all('a', href=lambda value: value and value != '#')
                                         #print(f"opcionWatch: {opcionWatch}")
                                         #print(f"links: {links}")
-                                        for link in links:                                        
+                                        for link in links:
                                             if opcionWatch in link.text:
                                                 enlace_opcionWatch = link.get('href')
                                                 break
                                         if enlace_opcionWatch:
                                             break
                                     #if enlace_opcionWatch:
-                                    urlInicial = "https://librefutboltv.net/" + enlace_opcionWatch                            
-                                    #urlInicial =  validate_and_get_url(urlInicial)                            
+                                    urlInicial = "https://librefutboltv.net/" + enlace_opcionWatch
+                                    #urlInicial =  validate_and_get_url(urlInicial)
                                     if "/embed/" not in urlInicial:
                                         urlFin = obtenerUrlFinalLibreTV(urlInicial)
                                     else:
@@ -2695,30 +2933,31 @@ while True:
                                     if urlFin is None:
                                         bool_estado_libref = False
                                         urlFin = urlInicial
-                                    
+
                                     if urlFin.startswith('//'):
-                                        urlFin = 'https:' + urlFin    
-                                    if urlFin.startswith('/embed/'): 
+                                        urlFin = 'https:' + urlFin
+                                    if urlFin.startswith('/embed/'):
                                         urlFin = 'https://futbollibrehd.net' + urlFin
                                     if urlFin is not None and urlFin != urlInicial:
                                         document_id = events_miss.get('f01_id_document')
                                         imagenIdiom = detalle_miss.get('f21_imagen_Idiom')
                                         text_idiom = detalle_miss.get('f23_text_Idiom')
                                         #debug
-                                        #pdb.set_trace()                                
+                                        #pdb.set_trace()
                                         evento_existente = next((evento for evento in v_list_eventos if evento["f01_id_document"] == document_id), None)
                                         evento_existente['f20_Detalles_Evento'][detalle_index].update({
                                                                 'f22_opcion_Watch': opcionWatch,
                                                                 'f21_imagen_Idiom': imagenIdiom,
                                                                 'f23_text_Idiom': text_idiom,
                                                                 'f24_url_Final': urlFin
-                                                            })                             
+                                                            })
                                         t_eventos.put_item(Item=evento_existente)
-                                        print(f'Se actualiza evento en BD desde LibreF Miss: ID:{document_id} | {name_event} | {urlFin} | {opcionWatch}')
-                                        
+                                        print(f'Se actualiza evento en BD desde LibreF Miss: '
+                                              f'ID: {document_id} | {name_event} | {urlFin} | {opcionWatch}')
+
                         except Exception as e:
-                            print(f"Error en obtener_eventos_miss desde LibreF MISS: {(e)}")                    
-                        
+                            print(f"Error en obtener_eventos_miss desde LibreF MISS: {(e)}")
+
                 # Datos del nuevo dealer
                 dealerLibreF = {
                     "f01_id_dealer": 4,
@@ -2736,7 +2975,7 @@ while True:
 
                 # Si el dealer no existe, se agrega a la lista
                 if not dealer_exists:
-                    vListDealers.append(dealerLibreF)                  
+                    vListDealers.append(dealerLibreF)
 
                 print(f"Termina procesar_LibreF")
         except Exception as e:
@@ -2758,8 +2997,8 @@ while True:
 
             # Si el dealer no existe, se agrega a la lista
             if not dealer_exists:
-                vListDealers.append(dealerLibreF)          
-        
+                vListDealers.append(dealerLibreF)
+
     def procesar_RojaOnline():
         print(f"Inicia procesar_RojaOnline")
         global eventNextDay
@@ -2773,7 +3012,7 @@ while True:
         global imagenIdiom
         global text_idiom
         global existeEvent
-        global contador_registros    
+        global contador_registros
         global bool_estado_RojaOn
         try:
             dia_event = None
@@ -2793,39 +3032,40 @@ while True:
 
             evento = {}
             headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36'}
-            responseRojaOn = requests.get(urlRojaOn, headers=headers, allow_redirects=True, verify=False)    
+            responseRojaOn = requests.get(urlRojaOn, headers=headers, allow_redirects=True, verify=False)
             #responseRojaOn = requests.get(urlRojaOn)
             soup = BeautifulSoup(responseRojaOn.text, 'html.parser')
                 # Obtener las filas de la tabla
             tableRows = soup.find_all('tr')
-            
+
             for row in tableRows:
                 try:
                     linkElement = row.find_all('td')
                     if len(linkElement) > 0:
                             # Accede a la informacion que necesitas en funcion de la posicion de las celdas
                         hora_event = linkElement[0].text
-                            # Selecciona el elemento 'a' dentro de la tercera columna                        
-                        name_element = linkElement[2].find('a')                             
-                        name_event_complet = linkElement[2].text.strip()                    
+                            # Selecciona el elemento 'a' dentro de la tercera columna
+                        name_element = linkElement[2].find('a')
+                        name_event_complet = linkElement[2].text.strip()
                         if "rojadirectahdenvivo" in name_element['href']:
                             #url = name_element['href']
                             continue
-                        #url = "http://tarjetarojatvonline.sx" + name_element['href']               
-                        url = "https://ww1.tarjetarojatvonline.sx" + name_element['href']                        
+                        #url = "http://tarjetarojatvonline.sx" + name_element['href']
+                        url = "https://ww1.tarjetarojatvonline.sx" + name_element['href']
                         url = validate_and_get_url(url)
                         partes_event_name = name_event_complet.split(':')
                         name_event = partes_event_name[1].strip()
                         event_categoria = partes_event_name[0].strip()
                         name_event = process_special_characters(name_event)
                         # if 'Auxerre' not in name_event:
-                        #     continue                            
+                        #     continue
                         event_categoria = process_special_characters(event_categoria)
                         if 'resultado.rojadirectaonlinetv.net' in url:
-                            continue   # Omitir el registro actual y continuar con el siguiente                    
+                            continue   # Omitir el registro actual y continuar con el siguiente
                         channel_url = obtenerUrlFinalRojaOn(url)
-    
-                        if channel_url:                        
+
+                        if channel_url:
+                            fecha_hora = None
                             channel_name, urlFinal = channel_url.split(" | ", 1)
                             urlFinal = urlFinal.replace(" ","")
                             dia_event = fecha_actual
@@ -2833,7 +3073,7 @@ while True:
                             #hora_event_inicio -= 1
                             hora_event_inicio %= 24
                             hora_event = str(hora_event_inicio).zfill(2) + hora_event[2:]
-                    
+
                             if contador_registros > 2 and hora_event_inicio > 18:
                                 eventNextDay = True
 
@@ -2844,17 +3084,23 @@ while True:
                                 dia_event += timedelta(days=1)
                                 dia_event = dia_event.strftime('%Y%m%d')
 
+                            fecha_hora = datetime.strptime(f"{dia_event} {hora_event}", '%Y%m%d %H:%M')
+                            #fecha_hora -= timedelta(hours=6)
+                            hora_event = fecha_hora.strftime("%H:%M")
+                            fecha_hora = fecha_hora.strftime('%Y-%m-%d %H:%M')
+
                             list_eventos_detalles = []   # Lista para almacenar la lista de eventos
                             list_eventos_detalles_existente = []   # Lista para almacenar la lista de eventos
                             if contador_registros > 0:
-                                existeEvent = verificarExisteEvento(hora_event,name_event)
+                                #existeEvent = verificarExisteEvento(hora_event,name_event)
+                                existeEvent = verificarExisteEvento(fecha_hora,name_event)
 
                             if existeEvent == "No" or contador_registros == 0:
                                 contador_registros += 1
                                 evento = {
                                         "f01_id_document": contador_registros,
                                         "f02_proveedor" : "RojaOn",
-                                        "f03_dia_event" : dia_event,
+                                        "f03_dia_event" : fecha_hora,
                                         'f04_hora_event': hora_event,
                                         'f05_event_categoria': event_categoria,
                                         'f06_name_event': name_event,
@@ -2874,7 +3120,8 @@ while True:
                                         # Agregar la lista de detallesEvento al evento
                                 evento['f20_Detalles_Evento'] = list_eventos_detalles
                                 v_list_eventos.append(evento)
-                                print(f'Se adiciona evento y detalles desde RojaOn: ID: {contador_registros} | {hora_event} | {name_event} | {urlFinal} | {channel_name}')
+                                print(f'Se adiciona evento y detalles desde RojaOn: '
+                                      f'ID: {contador_registros} | {fecha_hora} | {hora_event} | {event_categoria} | {name_event} | {urlFinal} | {channel_name}')
                                 bool_estado_RojaOn = True
                                 event_categoria = None
                                 url_flag = None
@@ -2893,15 +3140,15 @@ while True:
                                     #print(f'Ya existe Url para evento desde RojaOn : {hora_event} | {name_event} | {urlFinal}')
                                     continue
                                 else:
-                                    evento_existente = next((evento for evento in v_list_eventos + v_list_eventos_3 if evento.get("f01_id_document") == existeEvent), None)                                                                
-                                    if evento_existente:     
-                                        proveedor = evento_existente['f02_proveedor']                                                                                                              
+                                    evento_existente = next((evento for evento in v_list_eventos + v_list_eventos_3 if evento.get("f01_id_document") == existeEvent), None)
+                                    if evento_existente:
+                                        proveedor = evento_existente['f02_proveedor']
                                         if 'RojaOn' not in evento_existente['f02_proveedor']:
                                             evento_existente['f02_proveedor'] += ' | RojaOn'
-                                        if evento_existente['f03_dia_event'] is None and dia_event is not None:
-                                            evento_existente['f03_dia_event'] = dia_event                                            
+                                        if evento_existente['f03_dia_event'] is None and fecha_hora is not None:
+                                            evento_existente['f03_dia_event'] = fecha_hora
                                         if evento_existente['f07_URL_Flag'] is None and url_flag is not None:
-                                            evento_existente['f07_URL_Flag'] = url_flag  
+                                            evento_existente['f07_URL_Flag'] = url_flag
                                         if evento_existente['f05_event_categoria'] is None and event_categoria is not None:
                                             evento_existente['f05_event_categoria'] = event_categoria
 
@@ -2917,11 +3164,14 @@ while True:
                                         evento_existente['f20_Detalles_Evento'] = list_eventos_detalles_existente
                                         if evento_existente in v_list_eventos:
                                             v_list_eventos[v_list_eventos.index(evento_existente)] = evento_existente
-                                            print(f'Se actualiza list_eventos desde RojaOn: ID: {existeEvent} | {hora_event} | {name_event} | {urlFinal} | {channel_name}')
+                                            print(f'Se actualiza list_eventos desde RojaOn: '
+                                                  f'ID: {existeEvent} | {fecha_hora} | {hora_event} | {event_categoria} | {name_event} | {urlFinal} | {channel_name}')
                                         else:
                                             t_eventos.delete_item(Key={"f01_id_document": existeEvent, "f02_proveedor": proveedor})
                                             t_eventos.put_item(Item=evento_existente)
-                                            print(f'Se actualiza evento en BD desde RojaOn: ID: {existeEvent} | {hora_event} | {name_event} | {urlFinal} | {channel_name} | proveedor: {proveedor}')
+                                            print(f'Se actualiza evento en BD desde RojaOn: '
+                                                  f'ID: {existeEvent} | {fecha_hora} | {hora_event} | {event_categoria} | {name_event} | {urlFinal} | {channel_name} | proveedor: {proveedor}')
+
                                     channel_name = None
                                     imagenIdiom = None
                                     text_idiom = None
@@ -2929,7 +3179,7 @@ while True:
                     print(f"Error en procesar_RojaOn: {e}")
                     bool_estado_RojaOn = False
                     continue
-                                            
+
             # Datos del nuevo dealer
             dealerRojaOn = {
                 "f01_id_dealer": 5,
@@ -2947,7 +3197,7 @@ while True:
 
             # Si el dealer no existe, se agrega a la lista
             if not dealer_exists:
-                vListDealers.append(dealerRojaOn)         
+                vListDealers.append(dealerRojaOn)
             print(f"Termina procesar_RojaOnline")
         except Exception as e:
             print(f"Error en procesar_RojaOn: {e}")
@@ -2968,8 +3218,8 @@ while True:
 
             # Si el dealer no existe, se agrega a la lista
             if not dealer_exists:
-                vListDealers.append(dealerRojaOn)                
-                
+                vListDealers.append(dealerRojaOn)
+
     def procesar_RojaTV():
         print(f"Inicia procesar_RojaTV")
         global eventNextDay
@@ -2983,7 +3233,7 @@ while True:
         global imagenIdiom
         global text_idiom
         global existeEvent
-        global contador_registros    
+        global contador_registros
         try:
             global bool_estado_RojaTv
             dia_event = None
@@ -3002,7 +3252,7 @@ while True:
             urlFinal = None
             evento = {}
             headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36'}
-            response = requests.get(urlRojaTV, headers=headers, allow_redirects=True, verify=False)   
+            response = requests.get(urlRojaTV, headers=headers, allow_redirects=True, verify=False)
             #response = requests.get(urlRojaTV)
             soup = BeautifulSoup(response.text, 'html.parser')
 
@@ -3010,17 +3260,18 @@ while True:
             RowsRoja = soup.find_all('tr')
             # print(f'urlRojaTV : {urlRojaTV}')
             # print(f'response : {response.status_code}')
-            for row in RowsRoja:    
-                try:            
+            for row in RowsRoja:
+                try:
                     tds = row.find_all('td')
                     if len(tds) >= 3:
+                        fecha_hora = None
                         hora_event = tds[0].find('span').text
                         tdEvent = tds[2]
 
                             # Utiliza expresiones regulares para extraer el contenido entre <b></b>
                         match = re.search(r"<b>(.*?)<\/b>", tdEvent.decode_contents())
                         newEvent = match.group(1).replace('en Vivo', '').strip() if match else ''
-                        
+
                         textComplet = tdEvent.text.replace('en Vivo', '').strip()
                         indexOfNewEvent = textComplet.find(newEvent)
 
@@ -3043,7 +3294,7 @@ while True:
                         #pdb.set_trace()
 
                         url =  validate_and_get_url(url)
-                        
+
                         if 'httpswww' in url:
                             continue
 
@@ -3051,10 +3302,10 @@ while True:
                             name_event = newEvent.encode('latin1').decode('utf8')
                         except:
                             name_event = newEvent
-                        name_event = process_special_characters(name_event)    
+                        name_event = process_special_characters(name_event)
                         # if 'Auxerre' not in name_event:
-                        #     continue                         
-                                                
+                        #     continue
+
                         urlFinal = obtenerUrlFinalRojaTV(url)
                         if '408' in urlFinal:
                             time.sleep(2)
@@ -3063,7 +3314,7 @@ while True:
                         if "sin_data" in urlFinal:
                             bool_estado_RojaTv = False
 
-                        #urlFinal, channel_name = urlFinal_title.split('|') 
+                        #urlFinal, channel_name = urlFinal_title.split('|')
                         urlFinal = urlFinal.replace(" ","")
                         #channel_name = channel_name.strip()
                         channel_name = title_channel
@@ -3072,10 +3323,9 @@ while True:
                         #hora_event_inicio -= 1
                         hora_event_inicio %= 24
                         hora_event = str(hora_event_inicio).zfill(2) + hora_event[2:]
-                        
+
                         if contador_registros > 2 and hora_event_inicio > 18:
                             eventNextDay = True
-
                             # Verificar si eventNextDay es True y hora_event < 9
                         if eventNextDay and hora_event_inicio < 9:
                                 # Incrementar dia_event en 1 dia
@@ -3083,17 +3333,23 @@ while True:
                             dia_event += timedelta(days=1)
                             dia_event = dia_event.strftime('%Y%m%d')
 
+                        fecha_hora = datetime.strptime(f"{dia_event} {hora_event}", '%Y%m%d %H:%M')
+                        #fecha_hora -= timedelta(hours=6)
+                        hora_event = fecha_hora.strftime("%H:%M")
+                        fecha_hora = fecha_hora.strftime('%Y-%m-%d %H:%M')
+
                         list_eventos_detalles = []   # Lista para almacenar la lista de eventos
                         list_eventos_detalles_existente = []   # Lista para almacenar la lista de eventos
                         if contador_registros > 0:
-                            existeEvent = verificarExisteEvento(hora_event,name_event)
+                            #existeEvent = verificarExisteEvento(hora_event,name_event)
+                            existeEvent = verificarExisteEvento(fecha_hora,name_event)
 
                         if existeEvent == "No" or contador_registros == 0:
                             contador_registros += 1
                             evento = {
                                     "f01_id_document": contador_registros,
                                     "f02_proveedor" : "RojaTv",
-                                    "f03_dia_event" : dia_event,
+                                    "f03_dia_event" : fecha_hora,
                                     'f04_hora_event': hora_event,
                                     'f05_event_categoria': event_categoria,
                                     'f06_name_event': name_event,
@@ -3113,7 +3369,8 @@ while True:
                                     # Agregar la lista de detallesEvento al evento
                             evento['f20_Detalles_Evento'] = list_eventos_detalles
                             v_list_eventos.append(evento)
-                            print(f'Se adiciona evento y detalles desde RojaTv: ID: {contador_registros} | {hora_event} | {name_event} | {urlFinal} | {channel_name}')
+                            print(f'Se adiciona evento y detalles desde RojaTv: '
+                                  f'ID: {contador_registros} | {fecha_hora} | {hora_event} | {event_categoria} | {name_event} | {urlFinal} | {channel_name}')
                             bool_estado_RojaTv = True
                             event_categoria = None
                             url_flag = None
@@ -3132,15 +3389,15 @@ while True:
                                 #print(f'Ya existe Url para evento desde RojaTv : {hora_event} | {name_event} | {urlFinal} | {channel_name}')
                                 continue
                             else:
-                                evento_existente = next((evento for evento in v_list_eventos + v_list_eventos_3 if evento.get("f01_id_document") == existeEvent), None)                                                                
-                                if evento_existente:     
-                                    proveedor = evento_existente['f02_proveedor']                                                                                                              
+                                evento_existente = next((evento for evento in v_list_eventos + v_list_eventos_3 if evento.get("f01_id_document") == existeEvent), None)
+                                if evento_existente:
+                                    proveedor = evento_existente['f02_proveedor']
                                     if 'RojaTv' not in evento_existente['f02_proveedor']:
                                         evento_existente['f02_proveedor'] += ' | RojaTv'
-                                    if evento_existente['f03_dia_event'] is None and dia_event is not None:
-                                        evento_existente['f03_dia_event'] = dia_event                                        
+                                    if evento_existente['f03_dia_event'] is None and fecha_hora is not None:
+                                        evento_existente['f03_dia_event'] = fecha_hora
                                     if evento_existente['f07_URL_Flag'] is None and url_flag is not None:
-                                        evento_existente['f07_URL_Flag'] = url_flag  
+                                        evento_existente['f07_URL_Flag'] = url_flag
                                     if evento_existente['f05_event_categoria'] is None and event_categoria is not None:
                                         evento_existente['f05_event_categoria'] = event_categoria
 
@@ -3156,19 +3413,21 @@ while True:
                                     evento_existente['f20_Detalles_Evento'] = list_eventos_detalles_existente
                                     if evento_existente in v_list_eventos:
                                         v_list_eventos[v_list_eventos.index(evento_existente)] = evento_existente
-                                        print(f'Se actualiza list_eventos desde RojaTv: ID: {existeEvent} | {hora_event} | {name_event} | {urlFinal} | {channel_name}')
+                                        print(f'Se actualiza list_eventos desde RojaTv: '
+                                              f'ID: {existeEvent} | {fecha_hora} | {hora_event} | {event_categoria} | {name_event} | {urlFinal} | {channel_name}')
                                     else:
                                         t_eventos.delete_item(Key={"f01_id_document": existeEvent, "f02_proveedor": proveedor})
                                         t_eventos.put_item(Item=evento_existente)
-                                        print(f'Se actualiza evento en BD desde RojaTv: ID: {existeEvent} | {hora_event} | {name_event} | {urlFinal} | {channel_name} | proveedor: {proveedor}')
+                                        print(f'Se actualiza evento en BD desde RojaTv: '
+                                              f'ID: {existeEvent} | {fecha_hora} | {hora_event} | {event_categoria} | {name_event} | {urlFinal} | {channel_name} | proveedor: {proveedor}')
                                 channel_name = None
                                 imagenIdiom = None
                                 text_idiom = None
                 except Exception as e:
                     print(f"Error en procesar_RojaTv: {str(e)}")
-                    bool_estado_RojaTv = False                
-                    continue            
-                
+                    bool_estado_RojaTv = False
+                    continue
+
             # Datos del nuevo dealer
             dealerRojaTv = {
                 "f01_id_dealer": 6,
@@ -3186,7 +3445,7 @@ while True:
 
             # Si el dealer no existe, se agrega a la lista
             if not dealer_exists:
-                vListDealers.append(dealerRojaTv)       
+                vListDealers.append(dealerRojaTv)
             print(f"Termina procesar_RojaTV")
         except Exception as e:
             print(f"Error en procesar_RojaTv: {str(e)}")
@@ -3207,8 +3466,8 @@ while True:
 
             # Si el dealer no existe, se agrega a la lista
             if not dealer_exists:
-                vListDealers.append(dealerRojaTv)          
-    
+                vListDealers.append(dealerRojaTv)
+
     def procesar_Platin():
         try:
             print(f"Inicia procesar_Platin")
@@ -3227,7 +3486,7 @@ while True:
             global bool_estado_platin
             global foundDayOfWeek
             global currentDayOfWeek
-            
+
             dia_event = None
             hora_event = None
             event_categoria = None
@@ -3245,7 +3504,7 @@ while True:
 
             evento = {}
             headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36'}
-            responsePlatin = requests.get(urlPlatin, headers=headers, allow_redirects=True, verify=False)   
+            responsePlatin = requests.get(urlPlatin, headers=headers, allow_redirects=True, verify=False)
             #responsePlatin = requests.get(urlPlatin)
             html_contentPlatin = responsePlatin.text
             # Crear el objeto BeautifulSoup
@@ -3255,15 +3514,15 @@ while True:
             # Recorrer los elementos 'tr' y obtener la informacion necesaria
             hrefs_list = [tr.find('a').get('href') for tr in tr_elements_Platin if tr.find('a') is not None]
             href_Repetidos = len(hrefs_list) != len(set(hrefs_list))
-            
+
             lista_event_flag = []
             for tr in tr_elements_Platin:
                 # Obtener el nombre del evento y la URL de la bandera
                 td_elements = tr.find_all('td')
-                
+
                 if len(td_elements) >= 2:
                     nombre_evento = td_elements[1].get_text(strip=True)
-                    
+
                     # Obtener la URL de la bandera
                     img_element = td_elements[0].find('img')
                     if img_element:
@@ -3272,18 +3531,19 @@ while True:
                         bandera = None
                     nombre_evento = nombre_evento[6:]
                     # Agregar los datos a tu lista o hacer lo que necesites
-                    lista_event_flag.append({'nombre_evento': nombre_evento, 'bandera': bandera})        
-            
+                    lista_event_flag.append({'nombre_evento': nombre_evento, 'bandera': bandera})
+
             for tr in tr_elements_Platin:
-                try:                
+                try:
                     th_element = tr.find('th')
                     if th_element:
                         title = th_element.text.strip()
                         first_word_title = title.split()[0]
                         first_word_title = process_special_characters(first_word_title)
-                    else:                
+                    else:
                         if first_word_title == currentDayOfWeek:
                             if not href_Repetidos:
+                                fecha_hora = None
                                 try:
                                     url_flag = tr.find('img')['src']
                                 except (KeyError, TypeError):
@@ -3295,21 +3555,20 @@ while True:
                                 hora_event = td_text.split(' ', 1)[0]
                                 name_event =  td_text.split(' ', 1)[1]
                                 name_event = process_special_characters(name_event)
-                                name_event = capitalize_words(name_event)                                
+                                name_event = capitalize_words(name_event)
                                 url_event = tr.find('a')['href'].split('https://www.platinsport.com', 1)[-1]
                                 url_event = 'https://www.platinsport.com' + url_event
                                 url_event = validate_and_get_url(url_event)
                                 url_name_pairs = obtenerUrlFinalPlatin(url_event)
                                 if url_name_pairs is None or not url_name_pairs:
                                     continue
-                                
+
                                 dia_event = fecha_actual
                                 hora_event_inicio = int(hora_event.split(':')[0].zfill(2))   # Asegura que siempre tenga dos caracteres
-                                hora_event_inicio -= 7
+                                 # hora_event_inicio -= 7
                                 hora_event_inicio %= 24
                                 hora_event = str(hora_event_inicio).zfill(2) + hora_event[2:]
-                                
-                                
+
                                 if contador_registros > 2 and hora_event_inicio > 18:
                                     eventNextDay = True
                                     # Verificar si eventNextDay es True y hora_event < 9
@@ -3318,14 +3577,21 @@ while True:
                                     dia_event = datetime.strptime(dia_event, '%Y%m%d')
                                     dia_event += timedelta(days=1)
                                     dia_event = dia_event.strftime('%Y%m%d')
+
+                                fecha_hora = datetime.strptime(f"{dia_event} {hora_event}", '%Y%m%d %H:%M')
+                                fecha_hora -= timedelta(hours=7)
+                                hora_event = fecha_hora.strftime("%H:%M")
+                                fecha_hora = fecha_hora.strftime('%Y-%m-%d %H:%M')
+
                                 if contador_registros > 0:
-                                    existeEvent = verificarExisteEvento(hora_event,name_event)
+                                    #existeEvent = verificarExisteEvento(hora_event,name_event)
+                                    existeEvent = verificarExisteEvento(fecha_hora,name_event)
                                 if existeEvent == "No" or contador_registros == 0:
                                     contador_registros += 1
                                     eventoPlatin = {
                                             "f01_id_document": contador_registros,
                                             "f02_proveedor" : "Platin",
-                                            "f03_dia_event" : dia_event,
+                                            "f03_dia_event" : fecha_hora,
                                             'f04_hora_event': hora_event,
                                             'f05_event_categoria': event_categoria,
                                             'f06_name_event': name_event,
@@ -3368,17 +3634,17 @@ while True:
                                                 #print(f'Ya existe Url para evento desde Platin : {hora_event} | {name_event} | {urlFinal}')
                                                 continue
                                             else:
-                                                evento_existente = next((evento for evento in v_list_eventos + v_list_eventos_3 if evento.get("f01_id_document") == existeEvent), None)                                                                
+                                                evento_existente = next((evento for evento in v_list_eventos + v_list_eventos_3 if evento.get("f01_id_document") == existeEvent), None)
                                                 if evento_existente:
                                                     nombre_evento = evento_existente['f06_name_event']
                                                     event_categoria = name_event.split(nombre_evento)[0].strip() if nombre_evento in name_event else None
                                                     proveedor = evento_existente['f02_proveedor']
                                                     if 'Platin' not in evento_existente['f02_proveedor']:
                                                         evento_existente['f02_proveedor'] += ' | Platin'
-                                                    if evento_existente['f03_dia_event'] is None and dia_event is not None:
-                                                        evento_existente['f03_dia_event'] = dia_event                                                        
+                                                    if evento_existente['f03_dia_event'] is None and fecha_hora is not None:
+                                                        evento_existente['f03_dia_event'] = fecha_hora
                                                     if evento_existente['f07_URL_Flag'] is None and url_flag is not None:
-                                                        evento_existente['f07_URL_Flag'] = url_flag  
+                                                        evento_existente['f07_URL_Flag'] = url_flag
 
                                                     evento_existente['f05_event_categoria'] = event_categoria
                                                     list_eventos_detalles_existente = evento_existente.get("f20_Detalles_Evento", [])
@@ -3391,22 +3657,25 @@ while True:
                                                     # Agregar detalle al evento existente
                                                     list_eventos_detalles_existente.append(detalle)
                                                     evento_existente['f20_Detalles_Evento'] = list_eventos_detalles_existente
-                                                    if evento_existente in v_list_eventos:                                                        
-                                                        v_list_eventos[v_list_eventos.index(evento_existente)] = evento_existente                                                                        
-                                                        print(f'Se actualiza list_eventos desde Platin: ID: {existeEvent} | {hora_event} | {name_event} | {urlFinal} | {channel_name}')
+                                                    if evento_existente in v_list_eventos:
+                                                        v_list_eventos[v_list_eventos.index(evento_existente)] = evento_existente
+                                                        print(f'Se actualiza list_eventos desde Platin: '
+                                                              f'ID: {existeEvent} | {fecha_hora} | {hora_event} | {event_categoria} | {name_event} | {urlFinal} | {channel_name}')
                                                     else:
                                                         t_eventos.delete_item(Key={"f01_id_document": existeEvent, "f02_proveedor": proveedor})
                                                         t_eventos.put_item(Item=evento_existente)
-                                                        print(f'Se actualiza evento en BD desde Platin: ID: {existeEvent} | {hora_event} | {name_event} | {urlFinal} | {channel_name} | proveedor: {proveedor}')
+                                                        print(f'Se actualiza evento en BD desde Platin: '
+                                                              f'ID: {existeEvent} | {fecha_hora} | {hora_event} | {event_categoria} | {name_event} | {urlFinal} | {channel_name}  | proveedor: {proveedor}')
                                     except Exception as e:
                                         print(f"Error desde procesar_Platin 1:  {str(e)}")
                                         bool_estado_platin = False
-                                        continue                                                 
+                                        continue
                                 if existeEvent == "No":
                                         # Agregar la lista de detallesEvento al evento
                                     evento['f20_Detalles_Evento'] = list_eventos_detalles
                                     v_list_eventos.append(eventoPlatin)
-                                    print(f'Se adiciona evento y detalles desde Platin: ID: {contador_registros} | {hora_event} | {name_event} | {urlFinal} | {channel_name}')
+                                    print(f'Se adiciona evento y detalles desde Platin: '
+                                          f'ID: {contador_registros} | {fecha_hora} | {hora_event} | {event_categoria} | {name_event} | {urlFinal} | {channel_name}')
                                     bool_estado_platin = True
                                     event_categoria = None
                                     url_flag = None
@@ -3417,33 +3686,33 @@ while True:
                                     text_idiom = None
                                     channel_name = None
                                     imagenIdiom = None
-                            else:                           
+                            else:
                                 url_event = hrefs_list[0].split('https://www.platinsport.com', 1)[-1]
                                 url_event = 'https://www.platinsport.com' + url_event
                                 url_event = validate_and_get_url(url_event)
                                 headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36'}
                                 responsePlainUnicoURL = requests.get(url_event, headers=headers, allow_redirects=True, verify=False)
-                                #responsePlainUnicoURL = requests.get(url_event, headers=headers)   
+                                #responsePlainUnicoURL = requests.get(url_event, headers=headers)
                                 html_contentPlainUnicoURL = responsePlainUnicoURL.text
-                                soupPlainUnicoURL = BeautifulSoup(html_contentPlainUnicoURL, 'html.parser')                                                                   
+                                soupPlainUnicoURL = BeautifulSoup(html_contentPlainUnicoURL, 'html.parser')
                                 divs = soupPlainUnicoURL.find_all('div', class_='myDiv')
-                            
-                                if len(divs) >= 2:                                
+
+                                if len(divs) >= 2:
                                     #second_myDiv = divs[1]  # El segundo div (indice 1)
                                     #first_word_title = second_myDiv.text.split()[0]
-                                    if first_word_title == currentDayOfWeek:   
-                                                                    
+                                    if first_word_title == currentDayOfWeek:
+
                                         # Encontrar todo el contenido de la clase 'myDiv1'
                                         div_content = soupPlainUnicoURL.find('div', class_='myDiv1')
                                         # Obtener el contenido de la etiqueta como una cadena de texto
-                                        content_text = str(div_content)                                
+                                        content_text = str(div_content)
                                         # Dividir por saltos de linea
-                                        lines = content_text.split('\n')    
+                                        lines = content_text.split('\n')
                                         # Lista para almacenar los eventos
                                         eventos = []
                                         urls_channels = []
-                                        # Iterar a traves de las lineas del contenido        
-                                                        
+                                        # Iterar a traves de las lineas del contenido
+
                                         for line in lines:
                                             try:
                                                 line = line.strip()  # Eliminar espacios en blanco al principio y al final
@@ -3472,14 +3741,14 @@ while True:
                                                     href_end = line.find('"', href_start)
                                                     href = line[href_start:href_end]
                                                     href = href.replace(" ", "")
-                                                    channel = line.split(">")[1].split("<")[0]                                                
+                                                    channel = line.split(">")[1].split("<")[0]
                                                     channel = capitalize_words(channel)
                                                     # Agregar la URL y el canal a la lista
-                                                    urls_channels.append({"urlFin": href, "nameChannel": channel})                                                
+                                                    urls_channels.append({"urlFin": href, "nameChannel": channel})
                                             except Exception as e:
                                                 print(f"Error desde procesar_Platin 2: {str(e)}")
                                                 bool_estado_platin = False
-                                                continue     
+                                                continue
                                         # Agregar el ultimo evento a la lista
                                         if hora_event and name_event:
                                             evento = {
@@ -3492,29 +3761,31 @@ while True:
                                         # Imprimir los eventos obtenidos
                                         for evento in eventos:
                                             try:
+                                                fecha_hora = None
                                                 hora_event=evento["hora_event"]
                                                 name_event = evento["name_event"]
                                                 #pdb.set_trace()
                                                 name_event = process_special_characters(name_event)
                                                 # if 'Auxerre' not in name_event:
-                                                #     continue                                                  
-                                                
+                                                #     continue
+
                                                 url_name_pairs = evento["urlFinal_channel_name"]
                                                 if url_name_pairs is None or not url_name_pairs:
-                                                    continue                     
-                                                
+                                                    continue
+
                                                 for banderas in lista_event_flag:
                                                     if banderas['nombre_evento'] == name_event:
                                                         url_flag = banderas['bandera']
                                                         url_flag = validate_and_get_url(url_flag)
-                                                        break  # Salimos del bucle si encontramos el evento                                                                           
-                                                name_event = capitalize_words(name_event)                                             
-                                               
+                                                        break  # Salimos del bucle si encontramos el evento
+                                                name_event = capitalize_words(name_event)
+
                                                 dia_event = fecha_actual
                                                 hora_event_inicio = int(hora_event.split(':')[0].zfill(2))   # Asegura que siempre tenga dos caracteres
-                                                hora_event_inicio -= 7
+                                                # hora_event_inicio -= 7
                                                 hora_event_inicio %= 24
-                                                hora_event = str(hora_event_inicio).zfill(2) + hora_event[2:]                                                                     
+                                                hora_event = str(hora_event_inicio).zfill(2) + hora_event[2:]
+
                                                 if contador_registros > 2 and hora_event_inicio > 18:
                                                     eventNextDay = True
                                                     # Verificar si eventNextDay es True y hora_event < 9
@@ -3523,14 +3794,21 @@ while True:
                                                     dia_event = datetime.strptime(dia_event, '%Y%m%d')
                                                     dia_event += timedelta(days=1)
                                                     dia_event = dia_event.strftime('%Y%m%d')
+
+                                                fecha_hora = datetime.strptime(f"{dia_event} {hora_event}", '%Y%m%d %H:%M')
+                                                fecha_hora -= timedelta(hours=7)
+                                                hora_event = fecha_hora.strftime("%H:%M")
+                                                fecha_hora = fecha_hora.strftime('%Y-%m-%d %H:%M')
+
                                                 if contador_registros > 0:
-                                                    existeEvent = verificarExisteEvento(hora_event,name_event)
+                                                    #existeEvent = verificarExisteEvento(hora_event,name_event)
+                                                    existeEvent = verificarExisteEvento(fecha_hora,name_event)
                                                 if existeEvent == "No" or contador_registros == 0:
-                                                    contador_registros += 1                                            
+                                                    contador_registros += 1
                                                     eventoPlatin = {
                                                                     "f01_id_document": contador_registros,
                                                                     "f02_proveedor" : "Platin",
-                                                                    "f03_dia_event" : dia_event,
+                                                                    "f03_dia_event" : fecha_hora,
                                                                     'f04_hora_event': hora_event,
                                                                     'f05_event_categoria': event_categoria,
                                                                     'f06_name_event': name_event,
@@ -3554,7 +3832,7 @@ while True:
                                                         else:
                                                             text_idiom = ''   # Si no se encuentra nada entre corchetes, dejar textIdiom en blanco
                                                         existeUrlEvent = None
-                                                        
+
                                                         if 'acestream://' in urlFinal:
                                                             channel_name = ' Acestream ' + channel_name
 
@@ -3572,17 +3850,17 @@ while True:
                                                                 #print(f'Ya existe Url para evento desde Platin : {hora_event} | {name_event} | {urlFinal}')
                                                                 continue
                                                             else:
-                                                                evento_existente = next((evento for evento in v_list_eventos + v_list_eventos_3 if evento.get("f01_id_document") == existeEvent), None)                                                                
+                                                                evento_existente = next((evento for evento in v_list_eventos + v_list_eventos_3 if evento.get("f01_id_document") == existeEvent), None)
                                                                 if evento_existente:
                                                                     nombre_evento = evento_existente['f06_name_event']
                                                                     event_categoria = name_event.split(nombre_evento)[0].strip() if nombre_evento in name_event else None
                                                                     proveedor = evento_existente['f02_proveedor']
                                                                     if 'Platin' not in evento_existente['f02_proveedor']:
                                                                         evento_existente['f02_proveedor'] += ' | Platin'
-                                                                    if evento_existente['f03_dia_event'] is None and dia_event is not None:
-                                                                        evento_existente['f03_dia_event'] = dia_event
+                                                                    if evento_existente['f03_dia_event'] is None and fecha_hora is not None:
+                                                                        evento_existente['f03_dia_event'] = fecha_hora
                                                                     if evento_existente['f05_event_categoria'] is None and event_categoria is not None:
-                                                                        evento_existente['f05_event_categoria'] = event_categoria                                                                        
+                                                                        evento_existente['f05_event_categoria'] = event_categoria
                                                                     if evento_existente['f07_URL_Flag'] is None and url_flag is not None:
                                                                         evento_existente['f07_URL_Flag'] = url_flag
 
@@ -3596,23 +3874,26 @@ while True:
                                                                     # Agregar detalle al evento existente
                                                                     list_eventos_detalles_existente.append(detalle)
                                                                     evento_existente['f20_Detalles_Evento'] = list_eventos_detalles_existente
-                                                                    if evento_existente in v_list_eventos:                                                                        
+                                                                    if evento_existente in v_list_eventos:
                                                                         v_list_eventos[v_list_eventos.index(evento_existente)] = evento_existente
-                                                                        print(f'Se actualiza list_eventos desde Platin: ID: {existeEvent} | {hora_event} | {name_event} | {urlFinal} | {channel_name}')
+                                                                        print(f'Se actualiza list_eventos desde Platin: '
+                                                                              f'ID: {existeEvent} | {fecha_hora} | {hora_event} | {event_categoria} | {name_event} | {urlFinal} | {channel_name}')
                                                                     else:
                                                                         t_eventos.delete_item(Key={"f01_id_document": existeEvent, "f02_proveedor": proveedor})
                                                                         t_eventos.put_item(Item=evento_existente)
-                                                                        print(f'Se actualiza evento en BD desde Platin: ID: {existeEvent} | {hora_event} | {name_event} | {urlFinal} | {channel_name} | proveedor: {proveedor}')
+                                                                        print(f'Se actualiza evento en BD desde Platin: '
+                                                                              f'ID: {existeEvent} | {fecha_hora} | {hora_event} | {event_categoria} | {name_event} | {urlFinal} | {channel_name} | proveedor: {proveedor}')
 
                                                     except Exception as e:
                                                         print(f"Error desde procesar_Platin 3: {str(e)}")
                                                         bool_estado_platin = False
-                                                        continue                                                              
+                                                        continue
                                                 if existeEvent == "No":
                                                         # Agregar la lista de detallesEvento al evento
                                                     eventoPlatin['f20_Detalles_Evento'] = list_eventos_detalles
                                                     v_list_eventos.append(eventoPlatin)
-                                                    print(f'Se adiciona evento y detalles desde Platin: ID: {contador_registros} | {hora_event} | {name_event} | {urlFinal} | {channel_name}')
+                                                    print(f'Se adiciona evento y detalles desde Platin: '
+                                                          f'ID: {contador_registros} | {fecha_hora} | {hora_event} | {event_categoria} | {name_event} | {urlFinal} | {channel_name}')
                                                     bool_estado_platin = True
                                                     event_categoria = None
                                                     url_flag = None
@@ -3622,21 +3903,21 @@ while True:
                                                     logo_Visita = None
                                                     text_idiom = None
                                                     channel_name = None
-                                                    imagenIdiom = None      
+                                                    imagenIdiom = None
                                             except Exception as e:
                                                 print(f"Error desde procesar_Platin 4: {str(e)}")
                                                 bool_estado_platin = False
-                                                continue                                                                     
+                                                continue
                                     else:
-                                        bool_estado_platin = False                                    
+                                        bool_estado_platin = False
                             break
                         else:
                             bool_estado_platin = False
                 except Exception as e:
                     print(f"Error desde procesar_Platin 5: {str(e)}")
                     bool_estado_platin = False
-                    continue     
-                    
+                    continue
+
             # Datos del nuevo dealer
             dealerPlatin = {
                 "f01_id_dealer": 7,
@@ -3654,8 +3935,8 @@ while True:
 
             # Si el dealer no existe, se agrega a la lista
             if not dealer_exists:
-                vListDealers.append(dealerPlatin)         
-            print(f"Termina procesar_Platin")            
+                vListDealers.append(dealerPlatin)
+            print(f"Termina procesar_Platin")
         except Exception as e:
             print(f"Error desde procesar_Platin 6: {str(e)}")
             # Datos del nuevo dealer
@@ -3675,7 +3956,7 @@ while True:
 
             # Si el dealer no existe, se agrega a la lista
             if not dealer_exists:
-                vListDealers.append(dealerPlatin)             
+                vListDealers.append(dealerPlatin)
 
     def procesar_DaddyLivehd():
         print(f"Inicia procesar_DaddyLivehd")
@@ -3698,13 +3979,19 @@ while True:
             global bool_estado_DaddyLivehd
             dia_event = None
             hora_event = None
-            urlFinal = None        
-            existeEventdlhd = None
-            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36'}       
-            responseDaddyLivehd = requests.get(urlDaddyLivehd, headers=headers, allow_redirects=True, verify=False)            
+            event_categoria = None
+            name_event = None
+            url_flag = None
+            jug_Local = None
+            logo_Local = None
+            jug_Visita = None
+            logo_Visita = None
+            existeEvent = None
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36'}
+            responseDaddyLivehd = requests.get(urlDaddyLivehd, headers=headers, allow_redirects=True, verify=False)
             schedule_data = responseDaddyLivehd.json()
             fecha_actual_datetime = datetime.now()
-            fecha_actual_str = fecha_actual_datetime.strftime('%A %dth %B %Y - Schedule Time UK GMT')
+            # fecha_actual_str = fecha_actual_datetime.strftime('%A %dth %B %Y - Schedule Time UK GMT')
             # Ajuste para el sufijo del dia (1st, 2nd, 3rd, etc.)
             dia_f = str(fecha_actual_datetime.day).zfill(2)
             dia =  int(dia_f)
@@ -3715,12 +4002,17 @@ while True:
             fecha_actual_formato_json = fecha_actual_datetime.strftime(f'%A {dia_f}{sufijo} %B %Y - Schedule Time UK GMT')
             # Acceder directamente a los datos de la fecha actual
             categories = schedule_data.get(fecha_actual_formato_json, {})
-            for category, events in categories.items():              
+
+            for category, events in categories.items():
                 # Verificar si la categoria es "Soccer"
-                if category != "Tv Shows":
+
+                #if category != "Tv Show":
+                if "Show" not in category:
                     # Iterar sobre los eventos en la categoria "Soccer"
                     for event in events:
                         try:
+
+                            fecha_hora = None
                             hora_event = event["time"]
                             name_event = event["event"].split(":")[1].strip() if ":" in event["event"] else event["event"].strip()
                             event_categoria = event["event"].split(":")[0].strip() if ":" in event["event"] else event["event"].strip()
@@ -3728,7 +4020,7 @@ while True:
                             if event_categoria == name_event:
                                 event_categoria = category
                             else:
-                                event_categoria = category + ' ' + event_categoria                        
+                                event_categoria = category + ' ' + event_categoria
                             # Buscar "vs" o "vs." y dividir en consecuencia
                             if "vs" in name_event:
                                 jug_Local, jug_Visita = map(str.strip, name_event.split("vs"))
@@ -3743,18 +4035,33 @@ while True:
 
                             dia_event = fecha_actual
                             hora_event_inicio = int(hora_event.split(':')[0].zfill(2))   # Asegura que siempre tenga dos caracteres
-                            hora_event_inicio -= 5
+                            # hora_event_inicio -= 5
                             hora_event_inicio %= 24
                             hora_event = str(hora_event_inicio).zfill(2) + hora_event[2:]
-                                                                        
+
+                            if contador_registros > 2 and hora_event_inicio > 18:
+                                eventNextDay = True
+                                # Verificar si eventNextDay es True y hora_event < 9
+                            if eventNextDay and hora_event_inicio < 9:
+                                    # Incrementar dia_event en 1 dia
+                                dia_event = datetime.strptime(dia_event, '%Y%m%d')
+                                dia_event += timedelta(days=1)
+                                dia_event = dia_event.strftime('%Y%m%d')
+
+                            fecha_hora = datetime.strptime(f"{dia_event} {hora_event}", '%Y%m%d %H:%M')
+                            fecha_hora -= timedelta(hours=5)
+                            hora_event = fecha_hora.strftime("%H:%M")
+                            fecha_hora = fecha_hora.strftime('%Y-%m-%d %H:%M')
+
                             if contador_registros > 0:
-                                existeEventdlhd = verificarExisteEvento(hora_event,name_event)                            
-                            if existeEventdlhd == "No" or contador_registros == 0:
+                                #existeEvent = verificarExisteEvento(hora_event,name_event)
+                                existeEvent = verificarExisteEvento(fecha_hora,name_event)
+                            if existeEvent == "No" or contador_registros == 0:
                                 contador_registros += 1
                                 eventodlhd = {
                                             "f01_id_document": contador_registros,
                                             "f02_proveedor" : "DLHD",
-                                            "f03_dia_event" : dia_event,
+                                            "f03_dia_event" : fecha_hora,
                                             'f04_hora_event': hora_event,
                                             'f05_event_categoria': event_categoria,
                                             'f06_name_event': name_event,
@@ -3764,15 +4071,17 @@ while True:
                                             'f10_jug_Visita': jug_Visita,
                                             'f11_logo_Visita': logo_Visita
                                             }
-                            list_events_det_dlhd = []   # Lista para almacenar la lista de eventos                           
+                            list_events_det_dlhd = []   # Lista para almacenar la lista de eventos
                             # Iterar sobre los canales
                             for channel in event["channels"]:
-                                try:                                
+                                try:
+
                                     channel_name = channel["channel_name"]
-                                    urlFinal = f"https://dlhd.sx/embed/stream-{channel['channel_id']}.php"      
-                                    urlFinal = urlFinal.replace(" ","")                      
-                                    existeUrlEventldhd = None                                                                   
-                                    if existeEventdlhd == "No":                                         
+                                    urlFinal = f"https://dlhd.sx/embed/stream-{channel['channel_id']}.php"
+                                    urlFinal = urlFinal.replace(" ","")
+                                    existeUrlEventldhd = None
+
+                                    if existeEvent == "No":
                                         detalleldhd = {
                                                     'f21_imagen_Idiom': imagenIdiom,
                                                     'f22_opcion_Watch': channel_name,
@@ -3781,20 +4090,21 @@ while True:
                                                     }
                                         list_events_det_dlhd.append(detalleldhd)
                                     else:
-                                        existeUrlEventldhd = verificarExisteUrlEvento(existeEventdlhd, urlFinal)                                    
+                                        existeUrlEventldhd = verificarExisteUrlEvento(existeEvent, urlFinal)
                                         if existeUrlEventldhd == "Si_Existe_Url":
                                             #print(f'Ya existe Url para evento desde DLHD : {hora_event} | {name_event} | {urlFinal}')
                                             continue
                                         else:
-                                            evento_existente = next((evento for evento in v_list_eventos + v_list_eventos_3 if evento.get("f01_id_document") == existeEventdlhd), None)                                                                                                          
-                                            if evento_existente:     
-                                                proveedor = evento_existente['f02_proveedor']                                                                                                              
+                                            evento_existente = next((evento for evento in v_list_eventos + v_list_eventos_3 if evento.get("f01_id_document") == existeEvent), None)
+                                            if evento_existente:
+                                                proveedor = evento_existente['f02_proveedor']
                                                 if 'DLHD' not in evento_existente['f02_proveedor']:
                                                     evento_existente['f02_proveedor'] += ' | DLHD'
-                                                if evento_existente['f03_dia_event'] is None and dia_event is not None:
-                                                    evento_existente['f03_dia_event'] = dia_event                                                    
+                                                if evento_existente['f03_dia_event'] is None and fecha_hora is not None:
+                                                    evento_existente['f03_dia_event'] = fecha_hora
                                                 if evento_existente['f05_event_categoria'] is None and event_categoria is not None:
                                                     evento_existente['f05_event_categoria'] = event_categoria
+
                                                 list_eventos_detalles_existente = evento_existente.get("f20_Detalles_Evento", [])
                                                 detalle = {
                                                             'f21_imagen_Idiom': imagenIdiom,
@@ -3804,28 +4114,31 @@ while True:
                                                             }
                                                 list_eventos_detalles_existente.append(detalle)
                                                 evento_existente['f20_Detalles_Evento'] = list_eventos_detalles_existente
-                                                if evento_existente in v_list_eventos:                                                    
+                                                if evento_existente in v_list_eventos:
                                                     v_list_eventos[v_list_eventos.index(evento_existente)] = evento_existente
-                                                    print(f'Se actualiza list_eventos desde DLHD: ID:{existeEventdlhd} | {hora_event} | {name_event} | {urlFinal} | {channel_name}')
+                                                    print(f'Se actualiza list_eventos desde DLHD: '
+                                                          f'ID: {existeEvent} | {fecha_hora} | {hora_event} | {event_categoria} | {name_event} | {urlFinal} | {channel_name}')
                                                 else:
-                                                    t_eventos.delete_item(Key={"f01_id_document": existeEventdlhd, "f02_proveedor": proveedor})
+                                                    t_eventos.delete_item(Key={"f01_id_document": existeEvent, "f02_proveedor": proveedor})
                                                     t_eventos.put_item(Item=evento_existente)
-                                                    print(f'Se actualiza evento en BD desde DLHD: ID:{existeEventdlhd} | {hora_event} | {name_event} | {urlFinal} | {channel_name} | proveedor: {proveedor}')
+                                                    print(f'Se actualiza evento en BD desde DLHD: '
+                                                          f'ID: {existeEvent} | {fecha_hora} | {hora_event} | {event_categoria} | {name_event} | {urlFinal} | {channel_name} | proveedor: {proveedor}')
                                 except Exception as e:
-                                    print(f"Error en procesar_DLHD 1: {e}")    
+                                    print(f"Error en procesar_DLHD 1: {e}")
                                     bool_estado_DaddyLivehd = False
-                                    continue                                       
-                            if existeEventdlhd == "No":
+                                    continue
+                            if existeEvent == "No":
                                  # Agregar la lista de detallesEvento al evento
                                 eventodlhd['f20_Detalles_Evento'] = list_events_det_dlhd
                                 v_list_eventos.append(eventodlhd)
-                                print(f'Se adiciona evento y detalles desde DLHD: ID:{contador_registros} | {hora_event} | {name_event} | {urlFinal} | {channel_name}')   
-                                bool_estado_DaddyLivehd = True       
+                                print(f'Se adiciona evento y detalles desde DLHD: '
+                                      f'ID: {contador_registros} | {fecha_hora} | {hora_event} | {event_categoria} | {name_event} | {urlFinal} | {channel_name}')
+                                bool_estado_DaddyLivehd = True
                         except Exception as e:
-                            print(f"Error en procesar_DLHD 3: {e}")    
+                            print(f"Error en procesar_DLHD 3: {e}")
                             bool_estado_DaddyLivehd = False
-                            continue                                            
-                                    
+                            continue
+
             # Datos del nuevo dealer
             dealerDaddyLivehd = {
                 "f01_id_dealer": 8,
@@ -3844,7 +4157,7 @@ while True:
             # Si el dealer no existe, se agrega a la lista
             if not dealer_exists:
                 vListDealers.append(dealerDaddyLivehd)
-            print(f"Termina procesar_DaddyLivehd")    
+            print(f"Termina procesar_DaddyLivehd")
         except Exception as e:
             print(f"Error en procesar_DLHD 4: {e}")
             # Datos del nuevo dealer
@@ -3864,21 +4177,21 @@ while True:
 
             # Si el dealer no existe, se agrega a la lista
             if not dealer_exists:
-                vListDealers.append(dealerDaddyLivehd)               
-                            
-    def obtener_eventos():
-        # global ind_miss_LibreF
+                vListDealers.append(dealerDaddyLivehd)
 
+    def obtener_eventos():
+        # activaLibreF = 0
+
+        # global ind_miss_LibreF
         # actualizar_bases = 0
         # activaLiveTV = 0
         # activaSportline = 0
         # activaDirectatvHDme = 0
-        # activaLibreF = 1
         # ind_miss_LibreF = 0
         # activaRojaOn = 0
         # activaRojaTv = 0
         # activaPlatin = 0
-        # activaDaddyLivehd = 0
+        # activaDaddyLivehd = 1
 
         # print(f"activaLiveTV: {activaLiveTV}")
         # print(f"activaSportline: {activaSportline}")
@@ -3888,14 +4201,17 @@ while True:
         # print(f"activaRojaTv: {activaRojaTv}")
         # print(f"activaPlatin: {activaPlatin}")
         # print(f"activaDaddyLivehd: {activaDaddyLivehd}")
-        #print(f"ind_miss_LibreF: {ind_miss_LibreF}")
-        # sys.exit()    
+        # print(f"ind_miss_LibreF: {ind_miss_LibreF}")
+        # sys.exit()
         try:
             if actualizar_bases > 0:
                 procesar_Bases()
 
+            if activaDaddyLivehd > 0:
+                procesar_DaddyLivehd()
+
             if activaDirectatvHDme > 0:
-                procesar_DirectatvHDme()                    
+                procesar_DirectatvHDme()
 
             if activaRojaOn > 0:
                 procesar_RojaOnline()
@@ -3903,8 +4219,8 @@ while True:
             if activaRojaTv > 0:
                 procesar_RojaTV()
 
-            #if activaLibreF > 0:
-            procesar_LibreF()
+            if activaLibreF > 0:
+                procesar_LibreF()
 
             if activaSportline > 0:
                 procesar_SportsLine()
@@ -3912,15 +4228,12 @@ while True:
             if activaPlatin > 0:
                 procesar_Platin()
 
-            if activaDaddyLivehd > 0:
-                procesar_DaddyLivehd()                
-                
             if activaLiveTV > 0:
-                procesar_LiveTV()  
+                procesar_LiveTV()
 
         except Exception as e:
-            print(f'Error en obtener_eventos: {e}')                
-    
+            print(f'Error en obtener_eventos: {e}')
+
     # Invocar la funcion para obtener los eventos
     obtener_eventos()
     #sys.exit()
@@ -3937,15 +4250,15 @@ while True:
         #dealer_id = dealer.get('f01_id_dealer')   # Obten el ID del dealer
         dealer_id = decimal.Decimal(dealer.get('f01_id_dealer'))
         if dealer_id:
-            #eliminar_dato_en_bd_dealer(dealer_id, dealer)       
-            insertar_dato_en_bd_dealer(dealer)         
+            #eliminar_dato_en_bd_dealer(dealer_id, dealer)
+            insertar_dato_en_bd_dealer(dealer)
         else:
             print("El dato no tiene un ID, no se puede actualizar en la BD.")
 
-    def procesar_cambios_eventos(v_list_eventos, v_list_eventos_copia):      
+    def procesar_cambios_eventos(v_list_eventos, v_list_eventos_copia):
         # Crear un diccionario de eventos previos para acceso rapido
         eventos_previos_dict = {str(e['f01_id_document']): e for e in v_list_eventos_copia}
-        
+
         # Iterar sobre eventos actuales y comparar
         for evento_actual in v_list_eventos:
             id_documento = str(evento_actual['f01_id_document'])
@@ -3958,13 +4271,15 @@ while True:
                 proveedor = evento_previo.get('f02_proveedor')
                 json_evento_previo = json.dumps(evento_previo, sort_keys=True, default=str)
                 #print(f"Comparando evento actual con previo: {json_evento_actual} |vs| {json_evento_previo}")
-                
+
                 if json_evento_actual != json_evento_previo:
                     print(f"Evento modificado detectado, se actualizara: ID: {document_id} | {nuevo_evento}")
                     t_eventos.delete_item(Key={"f01_id_document": document_id, "f02_proveedor": proveedor})
-                    t_eventos.put_item(Item=evento_actual)                    
+                    t_eventos.put_item(Item=evento_actual)
             else:
                 print(f"Nuevo evento detectado, se agregara: {nuevo_evento}")
+                #v_message = (f'{hora_event} | {name_event} | {urlFinal}')
+                #asyncio.run(enviar_mensaje_telegram_channel(v_message))
                 t_eventos.put_item(Item=evento_actual)
 
     # Llamada a la funcion
@@ -3981,9 +4296,9 @@ while True:
         }
         # Insertar el nuevo elemento en la tabla
         response = t_dia_evento.put_item(Item=item)
-        #print(f"Se inserto el nuevo dia: {fecha_actual} - {response['ResponseMetadata']['HTTPStatusCode']}")    
+        #print(f"Se inserto el nuevo dia: {fecha_actual} - {response['ResponseMetadata']['HTTPStatusCode']}")
 
-    ############################################# envio de mensaje y finalizacion
+    ############################################# envio de mensaje y finalizacion #############################################
     horaFinEjecucion = datetime.now()
     diferencia_segundos = (horaFinEjecucion - horaIniciaEjecucion).total_seconds()
     minutos = int(diferencia_segundos // 60)  # Obtiene la parte entera de la división
@@ -4000,24 +4315,12 @@ while True:
         except telegram.error.TelegramError as e:
             print(f"Error al enviar el mensaje: {e}")
 
-    def obtener_chat_id(token):
-        url = f'https://api.telegram.org/bot{token}/getUpdates'
-        response = requests.get(url)
-        data = response.json()
-
-        if data['ok'] and data['result']:
-            chat_id = data['result'][0]['message']['chat']['id']
-            return chat_id
-        else:
-            # Manejar el caso en el que no se pudo obtener el chat_id
-            print('No se pudo obtener el chat_id. Revisa tu conexion o el token.')
-            return None
-
     token = "6559813109:AAEUKzEG6rRIFrt2pwkcHhZuA9Ynt3kqvlI"
     bot = telegram.Bot(token=token)
-    chat_id = '5954221232'
+    chat_id = '5954221232' #1002035964627:channel: - #'5954221232' #chat_id:bot
     asyncio.run(enviar_mensaje_telegram(chat_id, minutos,segundos))
+
     print(f'Finaliza ejecucion: {horaFinEjecucion}')
     if minutos < 10:
         print(f'Duerme 15 Min')
-        time.sleep(900) 
+        time.sleep(900)
