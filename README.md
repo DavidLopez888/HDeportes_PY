@@ -2,7 +2,7 @@
 
 # Descripción
 
-HDeportes Backend es un proyecto desarrollado en Python cuyo propósito es realizar scraping en múltiples sitios web para obtener las URL finales de los streams de eventos deportivos del día. Estos enlaces se integran tanto en una aplicación como en una página web para brindar acceso directo y simplificado a los eventos deportivos.
+HDport.es Backend es un proyecto desarrollado en Python cuyo propósito es realizar scraping en múltiples sitios web para obtener las URL finales de los streams de eventos deportivos del día. Estos enlaces se integran tanto en una aplicación como en una página web para brindar acceso directo y simplificado a los eventos deportivos.
 
 # Objetivo
 
