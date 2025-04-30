@@ -46,7 +46,7 @@ t_eventos = dynamodb.Table("eventos")
 pintar_mensajes = False
 logging_mensajes = True
 
-urlBases = "https://livetv.sx/enx/allupcomingsports/"
+urlBases = "https://livetv.sx/enx/allupcomingsports/" #https://livetv744.me/enx/'
 urlPlatin = "https://www.platinsport.com"
 urlportsonline = "https://sportsonline.gl/prog.txt"
 urlRojaOn = "https://ww1.tarjetarojatvonline.sx"
@@ -69,14 +69,15 @@ json_file_path_DLHD = "json_anterior_DLHD.json"
 json_file_path_lista_eventos = "json_anterior_lista_eventos.json"
 global_message_log = ""
 global_errors_log = ""
+hour_update_bases = datetime.now()
 
 orden_proveedores = {
     'DLHD': 1,
     'Platin': 2,
     'LiveTV': 3,
     'Sportline': 4,
-    'LibreF': 5,
-    'LFJson': 6,
+    'LFJson': 5,
+    'LibreF': 6,
     'DirectatvHDme': 7,
     'RojaOn': 8,
     'RojaTv': 9,
@@ -564,7 +565,7 @@ def obtenerUrlFinalLibreTVPlaywright(initial_url):
             # with open("pagina_debug_Playwright.html", "w", encoding="utf-8") as f:
             #     f.write(html)
             # Esperar la presencia del iframe
-            iframe = page.wait_for_selector("iframe", timeout=20000)  # Esperar hasta 10 segundos
+            iframe = page.wait_for_selector("iframe", timeout=10000)  # Esperar hasta 10 segundos
             # Obtener el atributo 'src' del iframe
             final_url = iframe.get_attribute("src")
             # Cerrar el navegador
@@ -863,7 +864,7 @@ def obtener_dia_actual():
         else:
             return "20000101"
     except Exception as e:
-        manejar_error_mensajes(f"Error al consultar la tabla dia_evento: {e}", 1)
+        manejar_error_mensajes(f"Error al consultar la tabla dia_evento: {e}", 0)
         return "20000101"
 
 
@@ -904,7 +905,7 @@ class MyDynamoDB_EliminarRegistrosTabla:
 
                         if evento_existente_index is not None:
                             del self.v_list_eventos_3[evento_existente_index]
-                            manejar_error_mensajes(f"Delete From v_list_eventos_3 where key: {key}", 0)
+                            # manejar_error_mensajes(f"Delete From v_list_eventos_3 where key: {key}", 0)
 
                 except Exception as e:
                     manejar_error_mensajes(f"Error al eliminar los datos de tabla: {self.table.name} {e}", 1)
@@ -991,7 +992,7 @@ def validate_and_get_url(url):
 
 
 def verificar_existencias():
-    global activaBases
+    # global activaBases
     global activaLiveTV
     global activaSportline
     global activaDirectatvHDme
@@ -1003,12 +1004,12 @@ def verificar_existencias():
     global activaLFJSON
     global ind_miss_LibreF
 
-    for evento in v_list_eventos_3:
-        proveedor = evento.get("f02_proveedor", "")
-        if "Bases" in proveedor:
-            break
-    else:
-        activaBases = 1    
+    # for evento in v_list_eventos_3:
+    #     proveedor = evento.get("f02_proveedor", "")
+    #     if "Bases" in proveedor:
+    #         break
+    # else:
+    #     activaBases = 1
 
     for evento in v_list_eventos_3:
         proveedor = evento.get("f02_proveedor", "")
@@ -1054,7 +1055,6 @@ def verificar_existencias():
             break
     else:
         activaLibreF = 1
-        ind_miss_LibreF = 0
     for evento in v_list_eventos_3:
         proveedor = evento.get("f02_proveedor", "")
         if "LiveTV" in proveedor:
@@ -1075,7 +1075,7 @@ def procesar_hora_evento(fecha_actual, hora_event, horas_dif=0, eventNextDay=Fal
         hora_evento = datetime.strptime(hora_event, "%H:%M").time()  # Convertir la hora del evento a un objeto datetime
         fecha_hora_evento = datetime.combine(fecha_act, hora_evento)  # Combinar fecha y hora en un solo objeto datetime
         fecha_hora_ajustada = fecha_hora_evento + timedelta(hours=horas_dif)  # Ajustar la hora según la diferencia de horas
-        hora_event_inicio = fecha_hora_ajustada.hour  # Obtener la hora de inicio del evento
+        # hora_event_inicio = fecha_hora_ajustada.hour  # Obtener la hora de inicio del evento
 
         # Determinar si el evento es al día siguiente
         hora_original = hora_evento.hour
@@ -1166,18 +1166,18 @@ def procesar_cambios_eventos(v_list_eventos, v_list_eventos_copia):
                     if evento_existente_index is not None:
                         # Si el evento existe, actualízalo
                         v_list_eventos_3[evento_existente_index] = evento_actual
-                        manejar_error_mensajes(f"Upd L3 ID: {id_documento} | {nuevo_evento}", 0)
+                        # manejar_error_mensajes(f"Upd L3 ID: {id_documento} | {nuevo_evento}", 0)
                     else:
                         # Si no existe, agrégalo
                         v_list_eventos_3.append(evento_actual)
-                        manejar_error_mensajes(f"Add L3 ID: {id_documento} | {nuevo_evento}", 0)
+                        # manejar_error_mensajes(f"Add L3 ID: {id_documento} | {nuevo_evento}", 0)
 
 
             else:
                 manejar_error_mensajes(f"Add DB ID: {id_documento} | {nuevo_evento}", 0)
                 t_eventos.put_item(Item=evento_actual)
                 v_list_eventos_3.append(evento_actual)
-                manejar_error_mensajes(f"Add L3 ID: {id_documento} | {nuevo_evento}", 0)
+                # manejar_error_mensajes(f"Add L3 ID: {id_documento} | {nuevo_evento}", 0)
     except Exception as e:
         manejar_error_mensajes(f"Error en procesar_cambios_eventos: {e}", 1)
 
@@ -1208,7 +1208,7 @@ def manejar_detalles_evento(proveedor, fecha_hora, event_categoria, name_event, 
             if proveedor != "Bases":
                 existeUrlEvent = verificarExisteUrlEvento(existeEvent, urlFinal)
                 if existeUrlEvent == "Si_Existe_Url":
-                    # manejar_error_mensajes(f"Already Exists ID: {contador_registros} | IDBD: {existeEvent} | In: {proveedor} | {fecha_hora} | {name_event} | {urlFinal}", 0)
+                    # manejar_error_mensajes(f"Already Exists ID: {contador_registros} | IDBD: {existeEvent} | In: {proveedor} | {fecha_hora} | {event_categoria} | {name_event} | {urlFinal} | {channel_name}", 0)
                     return
                 else:
                     evento_existente = next((evento for evento in v_list_eventos + v_list_eventos_3 if evento.get("f01_id_document") == existeEvent), None)
@@ -1239,7 +1239,7 @@ def manejar_detalles_evento(proveedor, fecha_hora, event_categoria, name_event, 
 
                         if evento_existente in v_list_eventos:
                             v_list_eventos[v_list_eventos.index(evento_existente)] = evento_existente
-                            manejar_error_mensajes(f"Upd L1 ID: {contador_registros} | IDBD: {existeEvent} | In: {proveedor} | {fecha_hora} | {event_categoria} | {name_event} | {urlFinal} | {channel_name}", 0)
+                            # manejar_error_mensajes(f"Upd L1 ID: {contador_registros} | IDBD: {existeEvent} | In: {proveedor} | {fecha_hora} | {event_categoria} | {name_event} | {urlFinal} | {channel_name}", 0)
                         else:
                             t_eventos.delete_item(Key={"f01_id_document": existeEvent, "f02_proveedor": proveedor_existente})
                             t_eventos.put_item(Item=evento_existente)
@@ -1253,11 +1253,11 @@ def manejar_detalles_evento(proveedor, fecha_hora, event_categoria, name_event, 
                             if evento_existente_index is not None:
                                 # Si el evento existe, actualízalo
                                 v_list_eventos_3[evento_existente_index] = evento_existente
-                                manejar_error_mensajes(f"Upd L3 ID: {contador_registros} | IDBD: {existeEvent} | In: {proveedor} | {fecha_hora} | {event_categoria} | {name_event} | {urlFinal} | {channel_name} | proveedor: {proveedor_existente}", 0)
+                                #  manejar_error_mensajes(f"Upd L3 ID: {contador_registros} | IDBD: {existeEvent} | In: {proveedor} | {fecha_hora} | {event_categoria} | {name_event} | {urlFinal} | {channel_name} | proveedor: {proveedor_existente}", 0)
                             else:
                                 # Si no existe, agrégalo
                                 v_list_eventos_3.append(evento_existente)
-                                manejar_error_mensajes(f"Add L3 ID: {contador_registros} | IDBD: {existeEvent} | In: {proveedor} | {fecha_hora} | {event_categoria} | {name_event} | {urlFinal} | {channel_name} | proveedor: {proveedor_existente}", 0)
+                                # manejar_error_mensajes(f"Add L3 ID: {contador_registros} | IDBD: {existeEvent} | In: {proveedor} | {fecha_hora} | {event_categoria} | {name_event} | {urlFinal} | {channel_name} | proveedor: {proveedor_existente}", 0)
 
         imagenIdiom = None
         channel_name = None
@@ -1318,7 +1318,7 @@ def Insert_Update_Events_Unified(proveedor, fecha_hora, event_categoria, name_ev
                         else:
                             text_idiom = ""
                         if "acestream://" in urlFinal:
-                            channel_name = " Acestream " + channel_name
+                            channel_name = channel_name + " | Acestream" 
 
                     elif proveedor == "LFJson":
                         embed_attributes = elemento.get("attributes", {})
@@ -1432,6 +1432,7 @@ def procesar_Bases():
         global text_idiom
         global existeEvent
         global contador_registros
+        contar_reg = 0
 
         dia_event = None
         hora_event = None
@@ -1465,6 +1466,7 @@ def procesar_Bases():
         responseBases = validate_and_get_url(urlBases)
         soup = BeautifulSoup(responseBases, "html.parser")
         td_elements = soup.find_all("td", colspan="2", height="38", valign="top", width="33%")
+        
         indice_nombre_evento = None
         eventos_bases = {
             name_Max_Event_Bases: name_Max_Event_Bases,
@@ -1529,7 +1531,7 @@ def procesar_Bases():
                                 if evento_existente_index is not None:
                                     # Si el evento existe, elimínalo
                                     del v_list_eventos_3[evento_existente_index]
-                                    manejar_error_mensajes(f"Del L3 ID: {document_id} | {fecha_event_base} | {name_event}",0,)
+                                    # manejar_error_mensajes(f"Del L3 ID: {document_id} | {fecha_event_base} | {name_event}",0,)
                             except Exception as e:
                                 manejar_error_mensajes(f"Ocurrio un error al eliminar el evento: {name_event} con el ID {document_id} | {e}",10,)
                 except Exception as e:
@@ -1624,6 +1626,8 @@ def procesar_Bases():
                         elementos= []
                     )
 
+                    contar_reg += 1
+
                     name_event = None
                     hora_event = None
                     event_categoria = None
@@ -1634,10 +1638,7 @@ def procesar_Bases():
                     logo_Visita = None
         else:
             for td in td_elements:
-                tables = td.find_all(
-                    "table",
-                    {"cellpadding": "1", "cellspacing": "2", "width": "100%"},
-                )
+                tables = td.find_all("table",{"cellpadding": "1", "cellspacing": "2", "width": "100%"},)
                 for table in tables:
                     try:
                         span_evdesc = table.find("span", {"class": "evdesc"})
@@ -1691,6 +1692,9 @@ def procesar_Bases():
                         # fecha_hora = fecha_hora.strftime("%Y-%m-%d %H:%M")
                         fecha_hora = fecha_hora.isoformat()
 
+                        print(f"fecha_hora {fecha_hora} | event_categoria {event_categoria} | name_event {name_event} | url_flag {url_flag} | jug_Local {jug_Local} | logo_Local {logo_Local} | jug_Visita {jug_Visita} | logo_Visita {logo_Visita}")
+                        # continue
+
                         Insert_Update_Events_Unified(
                             proveedor="Bases",
                             fecha_hora=fecha_hora,
@@ -1710,6 +1714,8 @@ def procesar_Bases():
                             elementos= []
                         )
 
+                        contar_reg += 1
+
                     except Exception as e:
                         manejar_error_mensajes(f"Error en Bases FOR final de tables: | {e}", 1)
                         continue
@@ -1721,12 +1727,13 @@ def procesar_Bases():
                     logo_Local = None
                     jug_Visita = None
                     logo_Visita = None
-
+        
+        manejar_error_mensajes(f"Add {contar_reg} for Bases", 1)
         # manejar_error_mensajes("========| Termina procesar_Bases |========", 0)
-        actualizar_estado_dealer(dealer_id=10, dealer_name="Bases", estado=True)
+        actualizar_estado_dealer(dealer_id=10, dealer_name="Bases", estado=False)
     except Exception as e:
         manejar_error_mensajes(f"Error en procesar_Bases: {e}", 1)
-        actualizar_estado_dealer(dealer_id=10, dealer_name="Bases", estado=True)
+        actualizar_estado_dealer(dealer_id=10, dealer_name="Bases", estado=False)
 
 
 def procesar_LiveTV():
@@ -1744,6 +1751,7 @@ def procesar_LiveTV():
         global text_idiom
         global existeEvent
         global contador_registros
+        contar_reg = 0
 
         dia_event = None
         hora_event = None
@@ -1987,7 +1995,7 @@ def procesar_LiveTV():
                         name_event = None
                         hora_event = None
                  # cantidad de registros procesados
-                manejar_error_mensajes(f"Add: {contar_reg} for LiveTV", 0)
+                # manejar_error_mensajes(f"Add: {contar_reg} for LiveTV", 0)
 
             except Exception as e:
                 manejar_error_mensajes(f"Error en procesar_LiveTV 1: {e}", 1)
@@ -2113,10 +2121,12 @@ def procesar_LiveTV():
                         jug_Visita = None
                         logo_Visita = None
 
-                manejar_error_mensajes(f"Add: {contar_reg} for LiveTV 2", 0)
+                # manejar_error_mensajes(f"Add: {contar_reg} for LiveTV 2", 0)
             except Exception as e:
                 manejar_error_mensajes(f"Error en procesar_LiveTV 2: {e}", 1)
                 actualizar_estado_dealer(dealer_id=1, dealer_name="LiveTV", estado=False)
+        
+        manejar_error_mensajes(f"Add {contar_reg} for LiveTV", 1)
         actualizar_estado_dealer(dealer_id=1, dealer_name="LiveTV", estado=False)
         # manejar_error_mensajes("Termina procesar_LiveTV", 0)
     except Exception as e:
@@ -2511,12 +2521,16 @@ def procesar_LibreF():
                                 # si  urlIni inicia con // agregar https:
                                 if urlIni.startswith("//"):
                                     urlIni = "https:" + urlIni
-                                                            
+
+                                if "stgruber.world" in urlIni or urlIni is None:
+                                    bool_estado_libref = False
+                                    continue
+
                                 fecha_hora, eventNextDay = procesar_hora_evento(fecha_actual, hora_event, -1, eventNextDay)
                                 # print(f"fecha_hora: {fecha_hora} | name_event: {name_event}")
                                 # continue
 
-                                # print(f"Procesando evento: {name_event} | Fecha y hora: {fecha_hora} | Canal: {channel} | URL: {urlIni}")
+                                # print(f"Procesando evento: {name_event} | Fecha y hora: {fecha_hora} | Canal: {channel_name} | URL: {urlIni} | urlcors : {urlcors} | enlace: {enlace}")
                                 # continue
 
                                 Insert_Update_Events_Unified(
@@ -2907,11 +2921,11 @@ def procesar_Platin():
             first_word_title = first_word_title.upper()
 
             # Verificar si la primera palabra es un día de la semana
-            days_of_week = {"MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY"}
-            if first_word_title in days_of_week:
-                manejar_error_mensajes(f"Día encontrado: {first_word_title}", 0)
-            else:
-                manejar_error_mensajes(f"No se encontró un día válido. Platin", 0)
+            # days_of_week = {"MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY"}
+            # if first_word_title in days_of_week:
+            #     manejar_error_mensajes(f"Día encontrado: {first_word_title}", 0)
+            # else:
+            #     manejar_error_mensajes(f"No se encontró un día válido. Platin", 0)
         else:
             manejar_error_mensajes(f"No se encontró el div con el día. Platin", 0)
 
@@ -3236,10 +3250,10 @@ def procesar_DaddyLivehd():
                                 event_categoria = category + " - " + event_categoria
                             # Buscar "vs" o "vs." y dividir en consecuencia
                             jug_Local, jug_Visita = (None,None,)  # Inicializar por defecto
-                            if "vs" in name_event or "vs." in name_event:
+                            if " vs " in name_event or " vs. " in name_event:
                                 try:
                                     # Usar regex para identificar el delimitador
-                                    delimitador = "vs" if "vs" in name_event else "vs."
+                                    delimitador = " vs " if " vs " in name_event else " vs. "
                                     partes = re.split(rf"\s*{re.escape(delimitador)}\s*",name_event,)
                                     if len(partes) == 2:  # Solo procesar si hay exactamente dos partes
                                         jug_Local, jug_Visita = map(str.strip, partes)
@@ -3537,11 +3551,11 @@ def procesar_LFJson():
                 name_event = process_special_characters(name_event)
                 country_data = attributes.get("country", {}).get("data", {}).get("attributes", {})
                 country_name = country_data.get("name", "")
-                url_flag = country_data.get("image", {}).get("data", {}).get("attributes", {}).get("url", "")
+                url_flag = country_data.get("image", {}).get("data", {}).get("attributes", {}).get("url", "").strip()
                 base_url_flag = "https://img.golazoplay.com"  # 'https://panel.atvenvivo.com'
                 event_categoria = f"{country_name} {event_categoria}"
                 url_flag = f"{base_url_flag} {url_flag}"
-
+                url_flag = url_flag.replace(" ", "")      
                 fecha_hora, eventNextDay = procesar_hora_evento(fecha_actual, hora_event, +5, eventNextDay)
         
                 Insert_Update_Events_Unified(
@@ -3591,7 +3605,7 @@ def obtener_eventos():
     # activaRojaTv = 0
     # activaPlatin = 0
     # activaLFJSON = 0
-    # activaDaddyLivehd = 1
+    # activaDaddyLivehd = 0
     # activaRojaOn = 0
 
     # print(f"activaBases: {activaBases} | activaLiveTV: {activaLiveTV} | activaSportline: {activaSportline} | activaDirectatvHDme: {activaDirectatvHDme} | activaLibreF: {activaLibreF} | activaRojaTv: {activaRojaTv} | activaPlatin: {activaPlatin} | activaLFJSON: {activaLFJSON} | activaDaddyLivehd: {activaDaddyLivehd} | activaRojaOn: {activaRojaOn}")
@@ -3602,14 +3616,8 @@ def obtener_eventos():
         if activaDaddyLivehd > 0:
             procesar_DaddyLivehd()
 
-        if activaDirectatvHDme > 0:
-            procesar_DirectatvHDme()
-
-        if activaRojaOn > 0:
-            procesar_RojaOnline()
-
-        if activaRojaTv > 0:
-            procesar_RojaTV()
+        if activaLFJSON > 0:
+            procesar_LFJson()
 
         if activaLibreF > 0:
             procesar_LibreF()
@@ -3618,10 +3626,16 @@ def obtener_eventos():
             procesar_SportsLine()
 
         if activaPlatin > 0:
-            procesar_Platin()
+            procesar_Platin()            
 
-        if activaLFJSON > 0:
-            procesar_LFJson()
+        if activaDirectatvHDme > 0:
+            procesar_DirectatvHDme()
+
+        if activaRojaOn > 0:
+            procesar_RojaOnline()
+
+        if activaRojaTv > 0:
+            procesar_RojaTV()
 
         if activaLiveTV > 0:
             procesar_LiveTV()
@@ -3634,9 +3648,8 @@ configurar_logger()
 
 while True:
     try:
-        tz_colombia = pytz.timezone("America/Bogota")
-        hora_inicia_ejecucion = datetime.now(tz_colombia)
-        hora_inicia_ejecucion = hora_inicia_ejecucion.replace(tzinfo=None)
+        hora_inicia_ejecucion = datetime.now()      
+        # hora_inicia_ejecucion = hora_inicia_ejecucion.replace(tzinfo=None)
         fecha_actual = hora_inicia_ejecucion.strftime("%Y%m%d")
         manejar_error_mensajes(f"Inicia ejecucion: {hora_inicia_ejecucion}", 0)
 
@@ -3699,7 +3712,17 @@ while True:
 
         contador_registros = 0
 
-        activaBases = 0
+        # activaBases cada 6 horas
+
+        if (hora_inicia_ejecucion - hour_update_bases).total_seconds() >= 21600:  # 6 horas en segundos
+            hour_update_bases = hora_inicia_ejecucion
+            activaBases = 1
+            # print(f"procesar_Bases() ejecutado, hora de actualizacion: {hour_update_bases}")    
+        else:
+            activaBases = 0
+            # print(f"procesar_Bases() no ejecutado, hora de actualizacion: {hour_update_bases}")
+
+        
         activaLiveTV = 0
         activaSportline = 0
         activaDirectatvHDme = 0
@@ -3736,12 +3759,12 @@ while True:
             for item in dealers_para_procesar:
                 proveedor = item.get("f02_dealer_name", "")
                 estado = item.get("f03_state", "")
-                if proveedor == "Bases":
+                if proveedor == "LiveTV":
                     if not estado:
-                        activaBases = 1                
-                elif proveedor == "LiveTV":
-                    if not estado:
-                        activaLiveTV = 1
+                        activaLiveTV = 1                
+                # elif proveedor == "Bases":
+                #     if not estado:
+                #         activaBases = 1
                 elif proveedor == "Sportline":
                     if not estado:
                         activaSportline = 1
@@ -3750,7 +3773,7 @@ while True:
                         activaDirectatvHDme = 1
                 elif proveedor == "LibreF":
                     if not estado:
-                        activaLibreF = 0
+                        activaLibreF = 1
                 elif proveedor == "RojaOn":
                     if not estado:
                         activaRojaOn = 1
@@ -3784,7 +3807,6 @@ while True:
                     # Verificar si hay al menos un detalle que contiene 'sin_data' en 'f22_opcion_Watch'
                     if any("sin_data" in detalle.get("f22_opcion_Watch", "") for detalle in detalles_evento if detalle.get("f22_opcion_Watch") is not None):
                         v_list_eventos.append(evento_data)
-                        ind_miss_LibreF = 1
                         activaLibreF = 0
 
                     # Si el evento contiene 'LiveTV', guarda su f01_id_document en la listas
@@ -3871,7 +3893,7 @@ while True:
             'octubre': '10', 'noviembre': '11', 'diciembre': '12'
         }        
 
-        now = datetime.now(tz_colombia)
+        now = datetime.now()
         currentDayOfWeek = diassemana[now.weekday()]
 
         # Invocar la funcion para obtener los eventos
@@ -3884,7 +3906,7 @@ while True:
             if dealer_id:
                 # eliminar_dato_en_bd_dealer(dealer_id, dealer)
                 insertar_dato_en_bd_dealer(dealer)
-                manejar_error_mensajes(f"Insert Dealer: {dealer} | {dealer_id}", 0,)
+                # manejar_error_mensajes(f"Insert Dealer: {dealer} | {dealer_id}", 0,)
             else:
                 manejar_error_mensajes(f"El dato no tiene un ID, no se puede actualizar en la BD. dealer: {dealer} | {dealer_id}",0,)
 
@@ -3900,22 +3922,22 @@ while True:
             response = t_dia_evento.put_item(Item=item)
 
         # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # envio de mensaje y finalizacion # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
-        # horaFinEjecucion = datetime.now()
-        horaFinEjecucion = datetime.now(tz_colombia)
-        horaFinEjecucion = horaFinEjecucion.replace(tzinfo=None)
+        horaFinEjecucion = datetime.now()
+        # horaFinEjecucion = datetime.now(tz_colombia)
+        # horaFinEjecucion = horaFinEjecucion.replace(tzinfo=None)
         diferencia_segundos = (horaFinEjecucion - hora_inicia_ejecucion).total_seconds()
         minutos = int(diferencia_segundos // 60)  # Obtiene la parte entera de la division
         segundos = int(diferencia_segundos % 60)  # Obtiene el resto de la division (segundos)
 
         # manejar_error_mensajes(f"El programa tardo {minutos}:{segundos} minutos en ejecutarse.",0,)
-        agregar_mensaje_al_log(f"El programa tardo {minutos}:{segundos} minutos en ejecutarse.")
+        agregar_mensaje_al_log(f"Script took {minutos}:{segundos}.")
         # asyncio.run(enviar_mensaje_telegram(chat_id, minutos,segundos))
         asyncio.run(enviar_mensaje_telegram_channel())
 
         manejar_error_mensajes(f"Finaliza ejecucion: {horaFinEjecucion}", 0)
 
         if minutos < 10:
-            manejar_error_mensajes("Duerme 10 Min", 0)
+            manejar_error_mensajes("Sleeping 10 Min", 0)
             time.sleep(600)
     except Exception as e:
         manejar_error_mensajes(f"Error detectado: {e}", 1)
