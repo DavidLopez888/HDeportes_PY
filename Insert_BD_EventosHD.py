@@ -30,8 +30,12 @@ from playwright.sync_api import sync_playwright
 from deepdiff import DeepDiff
 from collections import deque
 from decimal import Decimal
+from urllib.parse import quote
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+pintar_mensajes = False
+logging_mensajes = True
 
 # Configura tus credenciales
 aws_access_key_id = "AKIA5PXGRFNCH6O7E7U4"
@@ -43,8 +47,9 @@ t_dia_evento = dynamodb.Table("dia_evento")
 t_dealers = dynamodb.Table("dealers")
 t_eventos = dynamodb.Table("eventos")
 
-pintar_mensajes = False
-logging_mensajes = True
+# Crear cliente S3
+bucket_name = "hdportes"
+s3 = boto3.client("s3", region_name=region, aws_access_key_id=aws_access_key_id, aws_secret_access_key=aws_secret_access_key)
 
 urlBases = "https://livetv.sx/enx/allupcomingsports/" #https://livetv744.me/enx/'
 urlPlatin = "https://www.platinsport.com"
@@ -70,6 +75,9 @@ json_file_path_lista_eventos = "json_anterior_lista_eventos.json"
 global_message_log = ""
 global_errors_log = ""
 hour_update_bases = datetime.now()
+
+# para usae en procesar_hora_evento
+proveedores_estado = {}
 
 orden_proveedores = {
     'DLHD': 1,
@@ -888,6 +896,9 @@ class MyDynamoDB_EliminarRegistrosTabla:
                     if self.table.name == "eventos":
                         key = {"f01_id_document": item["f01_id_document"], "f02_proveedor": item["f02_proveedor"]}
                     elif self.table.name == "dealers":
+                        # si el dealer id es = 8 o 9, no eliminar
+                        if item.get("f01_id_dealer") in [8, 9]:
+                            continue
                         key = {"f01_id_dealer": item["f01_id_dealer"], "f02_dealer_name": item["f02_dealer_name"]}
                     else:
                         key = item  # Si la tabla no tiene clave compuesta, usa el item completo
@@ -1069,44 +1080,44 @@ def verificar_existencias():
         activaLFJSON = 1
 
 
-def procesar_hora_evento(fecha_actual, hora_event, horas_dif=0, eventNextDay=False):
+def procesar_hora_evento(fecha_actual, hora_event, horas_dif=0, id_proveedor=None):
     try:
-        fecha_act = datetime.strptime(fecha_actual, "%Y%m%d")  # Convertir la fecha actual a un objeto datetime
-        hora_evento = datetime.strptime(hora_event, "%H:%M").time()  # Convertir la hora del evento a un objeto datetime
-        fecha_hora_evento = datetime.combine(fecha_act, hora_evento)  # Combinar fecha y hora en un solo objeto datetime
-        fecha_hora_ajustada = fecha_hora_evento + timedelta(hours=horas_dif)  # Ajustar la hora según la diferencia de horas
-        # hora_event_inicio = fecha_hora_ajustada.hour  # Obtener la hora de inicio del evento
-
-        # Determinar si el evento es al día siguiente
+        global proveedores_estado
+        
+        # Inicializar estado del proveedor si no existe
+        if id_proveedor not in proveedores_estado:
+            proveedores_estado[id_proveedor] = {'eventNextDay': False}
+        
+        # Convertir a objetos datetime
+        fecha_act = datetime.strptime(fecha_actual, "%Y%m%d")
+        hora_evento = datetime.strptime(hora_event, "%H:%M").time()
+        fecha_hora_evento = datetime.combine(fecha_act, hora_evento)
+        
+        # Aplicar diferencia horaria
+        fecha_hora_ajustada = fecha_hora_evento + timedelta(hours=horas_dif)
+        
+        # Detección de horas tarde (para cambio de día)
         hora_original = hora_evento.hour
         hora_ajustada = fecha_hora_ajustada.hour
-
-        # Caso 1: Hora original es tarde (después de las 18)
-        if hora_original > 18:
-            eventNextDay = True
-        # Caso 2: Hora ajustada es tarde (después de las 18)
-        elif hora_ajustada > 18:
-            eventNextDay = True
-        # Caso 3: Hora original es madrugada (antes de las 6 AM)
-        elif hora_original < 8:
-            eventNextDay = True
-
-        # Ajustar fecha si el evento es al día siguiente y estamos en horas tempranas
-        if eventNextDay and hora_ajustada < 12:  # Cambiado de 9 a 12 para mayor seguridad
-            if horas_dif <= 0:  # Solo ajustar si no estamos sumando horas
-                fecha_hora_ajustada += timedelta(days=1)
-
-        # if hora_event_inicio > 18:
-        #     eventNextDay = True
-        # if eventNextDay and fecha_hora_ajustada.hour < 9 and horas_dif == 0:
-        #     fecha_hora_ajustada += timedelta(days=1)
-
-        # Convertir el objeto datetime a un string en formato ISO
+        
+        # Actualizar estado del proveedor
+        if hora_original >= 18 or hora_ajustada >= 18:
+            proveedores_estado[id_proveedor]['eventNextDay'] = True
+        elif hora_original >= 8 and hora_ajustada >= 8:
+            proveedores_estado[id_proveedor]['eventNextDay'] = False
+        
+        # Aplicar cambio de día si corresponde
+        if proveedores_estado[id_proveedor]['eventNextDay'] and (hora_original < 8 or hora_ajustada < 8):
+            fecha_hora_ajustada += timedelta(days=1)
+        
+        # Convertir a formato ISO
         fecha_hora_ajustada_str = fecha_hora_ajustada.isoformat()
-
-        return fecha_hora_ajustada_str, eventNextDay
+        
+        return fecha_hora_ajustada_str, proveedores_estado[id_proveedor]['eventNextDay']
+    
     except Exception as e:
         manejar_error_mensajes(f"Error en procesar_hora_evento: {e}", 1)
+        return None, False
 
 
 def actualizar_estado_proveedor(proveedor, estado):
@@ -1239,7 +1250,7 @@ def manejar_detalles_evento(proveedor, fecha_hora, event_categoria, name_event, 
 
                         if evento_existente in v_list_eventos:
                             v_list_eventos[v_list_eventos.index(evento_existente)] = evento_existente
-                            # manejar_error_mensajes(f"Upd L1 ID: {contador_registros} | IDBD: {existeEvent} | In: {proveedor} | {fecha_hora} | {event_categoria} | {name_event} | {urlFinal} | {channel_name}", 0)
+                            manejar_error_mensajes(f"Upd L1 ID: {contador_registros} | IDBD: {existeEvent} | In: {proveedor} | {fecha_hora} | {event_categoria} | {name_event} | {urlFinal} | {channel_name}", 0)
                         else:
                             t_eventos.delete_item(Key={"f01_id_document": existeEvent, "f02_proveedor": proveedor_existente})
                             t_eventos.put_item(Item=evento_existente)
@@ -1253,7 +1264,7 @@ def manejar_detalles_evento(proveedor, fecha_hora, event_categoria, name_event, 
                             if evento_existente_index is not None:
                                 # Si el evento existe, actualízalo
                                 v_list_eventos_3[evento_existente_index] = evento_existente
-                                #  manejar_error_mensajes(f"Upd L3 ID: {contador_registros} | IDBD: {existeEvent} | In: {proveedor} | {fecha_hora} | {event_categoria} | {name_event} | {urlFinal} | {channel_name} | proveedor: {proveedor_existente}", 0)
+                                # manejar_error_mensajes(f"Upd L3 ID: {contador_registros} | IDBD: {existeEvent} | In: {proveedor} | {fecha_hora} | {event_categoria} | {name_event} | {urlFinal} | {channel_name} | proveedor: {proveedor_existente}", 0)
                             else:
                                 # Si no existe, agrégalo
                                 v_list_eventos_3.append(evento_existente)
@@ -1417,6 +1428,101 @@ def actualizar_estado_dealer(dealer_id, dealer_name, estado):
         vListDealers.append(dealer)
 
 
+def normalizar_texto(texto):
+    if not texto:
+        return "desconocido"
+
+    # Quitar acentos
+    texto = unicodedata.normalize('NFD', texto)
+    texto = texto.encode('ascii', 'ignore').decode('utf-8')
+
+    # Convertir a minúsculas, reemplazar espacios por _
+    texto = texto.lower().replace(" ", "_")
+
+    # Reemplazar caracteres no deseados
+    texto = re.sub(r"[^\w\-]", "", texto)  # solo letras, números y _
+    texto = re.sub(r"_+", "_", texto)  # evitar múltiples guiones bajos seguidos
+    texto = texto.strip("_")  # quitar guiones bajos al inicio y fin
+    return texto
+
+
+def guardar_logo_en_s3(jugador, url_logo, categoria):
+    try:
+        # Normalizar ruta
+        path_categoria = normalizar_texto(categoria)
+        file_name = normalizar_texto(jugador) + ".gif"
+        s3_key = f"escudos/{path_categoria}/{file_name}"
+
+        # Descargar la imagen desde la URL
+        response = requests.get(url_logo)
+        if response.status_code != 200:
+            manejar_error_mensajes(f"❌ Error descargando imagen desde {url_logo}", 1)
+            return None
+
+        image_data = response.content
+
+        # Subir a S3 con metadata
+        s3.put_object(
+            Bucket="hdportes",
+            Key=s3_key,
+            Body=image_data,
+            ContentType="image/gif",
+            Metadata={
+                "jugador_original": jugador.strip(),
+                "categoria": categoria.strip(),
+                "url_origen": url_logo.strip()
+            }
+        )
+
+        s3_url = f"https://hdportes.s3.amazonaws.com/{s3_key}"
+        manejar_error_mensajes(f"✅ Imagen subida: {s3_url}", 0)
+        return s3_url
+
+    except Exception as e:
+        manejar_error_mensajes(f"❌ Error subiendo imagen a S3: {e}", 1)
+        return None
+
+
+def guardar_icono_en_s3(url_flag, categoria):
+    try:
+        # Obtener el nombre del archivo sin la extensión
+        nombre_icono = url_flag.split("/")[-1].replace(".gif", "")
+        
+        # Normalizar nombre final
+        file_name = normalizar_texto(f"{categoria}_{nombre_icono}") + ".gif"
+        path_categoria = normalizar_texto(categoria)
+        s3_key = f"icons/{path_categoria}/{file_name}"
+
+        # Descargar imagen
+        response = requests.get(url_flag)
+        if response.status_code != 200:
+            manejar_error_mensajes(f"❌ Error descargando ícono desde {url_flag}", 1)
+            return None
+
+        image_data = response.content
+
+        # Subir a S3 con metadata
+        s3.put_object(
+            Bucket="hdportes",
+            Key=s3_key,
+            Body=image_data,
+            ContentType="image/gif",
+            Metadata={
+                "nombre_icono": nombre_icono.strip(),
+                "categoria": categoria.strip(),
+                "url_origen": url_flag.strip()
+            }
+        )
+
+        s3_url = f"https://hdportes.s3.amazonaws.com/{s3_key}"
+        manejar_error_mensajes(f"✅ Ícono subido: {s3_url}", 0)
+        return s3_url
+
+    except Exception as e:
+        manejar_error_mensajes(f"❌ Error subiendo ícono a S3: {e}", 1)
+        return None
+
+
 def procesar_Bases():
     try:
         manejar_error_mensajes(" ============================================= | Inicia procesar_Bases | ============================================= ", 0)
@@ -1578,6 +1684,9 @@ def procesar_Bases():
                         try:
                             responseL = validate_and_get_url(url_event)
                             document = BeautifulSoup(responseL, "html.parser")
+                            sport_title_element = document.find("span", class_="sporttitle")
+                            event_cat = sport_title_element.b.get_text(strip=True) if sport_title_element and sport_title_element.b else None
+
                             imagesWithItemprop = document.select("img[itemprop]")
                             # leyendos imagenes
                             if len(imagesWithItemprop) >= 2:
@@ -1606,6 +1715,12 @@ def procesar_Bases():
                     # hora_event = fecha_hora.strftime("%H:%M")
                     # fecha_hora = fecha_hora.strftime("%Y-%m-%d %H:%M")
                     fecha_hora = fecha_hora.isoformat()
+
+                    event_categoria = f"{event_cat} {event_categoria}"
+
+                    logo_Local_s3 = guardar_logo_en_s3(jug_Local, logo_Local, event_categoria) if logo_Local else None
+                    logo_Visita_s3 = guardar_logo_en_s3(jug_Visita, logo_Visita, event_categoria) if logo_Visita else None
+                    url_flag_s3 = guardar_icono_en_s3(url_flag, event_categoria) if url_flag else None                        
 
                     Insert_Update_Events_Unified(
                         proveedor="Bases",
@@ -1672,6 +1787,9 @@ def procesar_Bases():
 
                         responseL = validate_and_get_url(url_event)
                         document = BeautifulSoup(responseL, "html.parser")
+                        sport_title_element = document.find("span", class_="sporttitle")
+                        event_cat = sport_title_element.b.get_text(strip=True) if sport_title_element and sport_title_element.b else None   
+
                         imagesWithItemprop = document.select("img[itemprop]")
 
                         if len(imagesWithItemprop) >= 2:
@@ -1692,8 +1810,14 @@ def procesar_Bases():
                         # fecha_hora = fecha_hora.strftime("%Y-%m-%d %H:%M")
                         fecha_hora = fecha_hora.isoformat()
 
-                        print(f"fecha_hora {fecha_hora} | event_categoria {event_categoria} | name_event {name_event} | url_flag {url_flag} | jug_Local {jug_Local} | logo_Local {logo_Local} | jug_Visita {jug_Visita} | logo_Visita {logo_Visita}")
+                        # print(f"fecha_hora {fecha_hora} | event_categoria {event_categoria} | name_event {name_event} | url_flag {url_flag} | jug_Local {jug_Local} | logo_Local {logo_Local} | jug_Visita {jug_Visita} | logo_Visita {logo_Visita}")
                         # continue
+
+                        event_categoria = f"{event_cat} {event_categoria}"
+                        
+                        logo_Local_s3 = guardar_logo_en_s3(jug_Local, logo_Local, event_categoria) if logo_Local else None
+                        logo_Visita_s3 = guardar_logo_en_s3(jug_Visita, logo_Visita, event_categoria) if logo_Visita else None
+                        url_flag_s3 = guardar_icono_en_s3(url_flag, event_categoria) if url_flag else None                        
 
                         Insert_Update_Events_Unified(
                             proveedor="Bases",
@@ -1701,11 +1825,11 @@ def procesar_Bases():
                             # hora_event=hora_event,
                             event_categoria=event_categoria,
                             name_event=name_event,
-                            url_flag=url_flag,
+                            url_flag=url_flag_s3,
                             jug_Local=jug_Local,
-                            logo_Local=logo_Local,
+                            logo_Local=logo_Local_s3,
                             jug_Visita=jug_Visita,
-                            logo_Visita=logo_Visita,
+                            logo_Visita=logo_Visita_s3,
                             imagenIdiom=imagenIdiom,
                             channel_name=channel_name,
                             text_idiom=text_idiom,
@@ -1919,7 +2043,6 @@ def procesar_LiveTV():
                                 else:
                                     continue
 
-
                             fecha_hora = datetime.strptime(f"{dia_event} {hora_event}", "%Y%m%d %H:%M")
                             fecha_hora -= timedelta(hours=1)
                             # hora_event = fecha_hora.strftime("%H:%M")
@@ -1928,6 +2051,8 @@ def procesar_LiveTV():
 
                             responseL = validate_and_get_url(url_event)
                             document = BeautifulSoup(responseL, "html.parser")
+                            sport_title_element = document.find("span", class_="sporttitle")
+                            event_cat = sport_title_element.b.get_text(strip=True) if sport_title_element and sport_title_element.b else None                       
 
                             # document = BeautifulSoup(responseL.content, 'html.parser')
                             imagesWithItemprop = document.select("img[itemprop]")
@@ -1945,7 +2070,7 @@ def procesar_LiveTV():
                                     # Extrae el texto entre el '/' y el '.'
                                     desired_text = title_text[first_slash_pos + 1 : first_dot_after_slash_pos].strip()  # Elimina los espacios en blanco
                                 else:
-                                    desired_text = None
+                                    desired_text = ""
 
                                 event_categoria = f"{desired_text} - {event_categoria}"
 
@@ -1961,17 +2086,23 @@ def procesar_LiveTV():
                             if logo_Visita is not None and "/." in logo_Visita:
                                 logo_Visita = None
 
+                            event_categoria = f"{event_cat} {event_categoria}"
+                            
+                            logo_Local_s3 = guardar_logo_en_s3(jug_Local, logo_Local, event_categoria) if logo_Local else None
+                            logo_Visita_s3 = guardar_logo_en_s3(jug_Visita, logo_Visita, event_categoria) if logo_Visita else None
+                            url_flag_s3 = guardar_icono_en_s3(url_flag, event_categoria) if url_flag else None
+
                             Insert_Update_Events_Unified(
                                 proveedor="LiveTV",
                                 fecha_hora=fecha_hora,
                                 # hora_event=hora_event,
                                 event_categoria=event_categoria,
                                 name_event=name_event,
-                                url_flag=url_flag,
+                                url_flag=url_flag_s3,
                                 jug_Local=jug_Local,
-                                logo_Local=logo_Local,
+                                logo_Local=logo_Local_s3,
                                 jug_Visita=jug_Visita,
-                                logo_Visita=logo_Visita,
+                                logo_Visita=logo_Visita_s3,
                                 imagenIdiom=imagenIdiom,
                                 channel_name=channel_name,
                                 text_idiom=text_idiom,
@@ -2057,12 +2188,16 @@ def procesar_LiveTV():
 
                             responseL = validate_and_get_url(url_event)
                             document = BeautifulSoup(responseL, "html.parser")
+                            sport_title_element = document.find("span", class_="sporttitle")
+                            event_cat = sport_title_element.b.get_text(strip=True) if sport_title_element and sport_title_element.b else None
+
                             imagesWithItemprop = document.select("img[itemprop]")
                              # Obtener todas las tablas con clase "lnktbj"
                             tables_b = document.select("table.lnktbj")
                             title_element = document.find("title")
                             title_text = title_element.get_text()
                             first_slash_pos = title_text.find("/")
+
                             if first_slash_pos != -1:
                                 # Encuentra la posicion del primer '.' despues del primer '/'
                                 first_dot_after_slash_pos = title_text.find(".", first_slash_pos)
@@ -2071,7 +2206,7 @@ def procesar_LiveTV():
                                     # Extrae el texto entre el '/' y el '.'
                                     desired_text = title_text[first_slash_pos + 1 : first_dot_after_slash_pos].strip()  # Elimina los espacios en blanco
                                 else:
-                                    desired_text = None
+                                    desired_text = ""
 
                                 event_categoria = f"{desired_text} - {event_categoria}"
 
@@ -2087,17 +2222,24 @@ def procesar_LiveTV():
                             if logo_Visita is not None and "/." in logo_Visita:
                                 logo_Visita = None
 
+                            event_categoria = f"{event_cat} {event_categoria}"
+
+                            logo_Local_s3 = guardar_logo_en_s3(jug_Local, logo_Local, event_categoria) if logo_Local else None
+                            logo_Visita_s3 = guardar_logo_en_s3(jug_Visita, logo_Visita, event_categoria) if logo_Visita else None
+                            url_flag_s3 = guardar_icono_en_s3(url_flag, event_categoria) if url_flag else None
+
+
                             Insert_Update_Events_Unified(
                                 proveedor="LiveTV",
                                 fecha_hora=fecha_hora,
                                 # hora_event=hora_event,
                                 event_categoria=event_categoria,
                                 name_event=name_event,
-                                url_flag=url_flag,
+                                url_flag=url_flag_s3,
                                 jug_Local=jug_Local,
-                                logo_Local=logo_Local,
+                                logo_Local=logo_Local_s3,
                                 jug_Visita=jug_Visita,
-                                logo_Visita=logo_Visita,
+                                logo_Visita=logo_Visita_s3,
                                 imagenIdiom=imagenIdiom,
                                 channel_name=channel_name,
                                 text_idiom=text_idiom,
@@ -2217,7 +2359,7 @@ def procesar_SportsLine():
                                 manejar_error_mensajes(f"urlFinal en procesar_SportsOnline es None: line: {line}",1,)
                                 continue
 
-                            fecha_hora, eventNextDay = procesar_hora_evento(fecha_actual, hora_event, -1, eventNextDay)
+                            fecha_hora, eventNextDay = procesar_hora_evento(fecha_actual, hora_event, -1, "Sportline")
                             # print(f"fecha_hora: {fecha_hora} | hora_event: {hora_event} | name_event: {name_event} | eventNextDay: {eventNextDay}")
                             # continue
 
@@ -2360,7 +2502,7 @@ def procesar_DirectatvHDme():
                             manejar_error_mensajes(f"urlFinal en procesar_DirectatvHDme es None: urlFinChannel: {urlFinChannel}",1,)
                             continue
 
-                        fecha_hora, eventNextDay = procesar_hora_evento(fecha_actual, hora_event, +5, eventNextDay)
+                        fecha_hora, eventNextDay = procesar_hora_evento(fecha_actual, hora_event, +5, "DirectatvHDme")
                         # print(f"fecha_hora: {fecha_hora} | name_event : {name_event}")
                         # continue
                         Insert_Update_Events_Unified(
@@ -2470,6 +2612,8 @@ def procesar_LibreF():
         if dia_LibreF == fecha_actual:
             eventos = soup.find_all("li")
             if eventos:
+                # print(f"eventos: {len(eventos)}")
+                
                 for evento in eventos:
                     # Iterar a traves de los registros
                     try:
@@ -2496,8 +2640,14 @@ def procesar_LibreF():
                         hora_event = evento.find(class_="t").text if evento.find(class_="t") else ""
 
                         # Obtener todos los elementos de tipo <li> que son hijos de evento
-                        canalesYEnlaces = evento.select("ul > li.subitem1")
+                        # canalesYEnlaces = evento.select("ul > li.subitem1")
+                        ul_canales = evento.find("ul")
+                        canalesYEnlaces = ul_canales.find_all("li", class_="subitem1") if ul_canales else []
 
+                        # print(f"evento: {(evento)}")
+                        # print(f"name_event: {(name_event)}")
+                        # print(f"canalesYEnlaces: {len(canalesYEnlaces)}")
+                        # sys.exit()                  
                         # Recorrer cada <li> hijo para obtener los canales y enlaces
                         for ce in canalesYEnlaces:
                             try:
@@ -2523,10 +2673,10 @@ def procesar_LibreF():
                                     urlIni = "https:" + urlIni
 
                                 if "stgruber.world" in urlIni or urlIni is None:
-                                    bool_estado_libref = False
+                                    # bool_estado_libref = False
                                     continue
 
-                                fecha_hora, eventNextDay = procesar_hora_evento(fecha_actual, hora_event, -1, eventNextDay)
+                                fecha_hora, eventNextDay = procesar_hora_evento(fecha_actual, hora_event, -1, "LibreF")
                                 # print(f"fecha_hora: {fecha_hora} | name_event: {name_event}")
                                 # continue
 
@@ -2669,7 +2819,7 @@ def procesar_RojaOnline():
                         # print(f"hora_event antes am-pm: {hora_event} | name_event: {name_event}")
                         # hora_event = (lambda hora: f"{(int(hora.split(':')[0]) % 12) + (12 if 'pm' in hora.lower() else 0):02d}:{hora.split(':')[1][:2]}")(hora_event)
                         # print(f"hora_event despues: {hora_event} | name_event: {name_event}")
-                        fecha_hora, eventNextDay = procesar_hora_evento(fecha_actual, hora_event, +5, eventNextDay)
+                        fecha_hora, eventNextDay = procesar_hora_evento(fecha_actual, hora_event, +5, "RojaOn")
                         # print(f"fecha_hora : {fecha_hora} | name_event: {name_event}")
                         # continue
 
@@ -2809,7 +2959,7 @@ def procesar_RojaTV():
                     # channel_name = channel_name.strip()
                     channel_name = title_channel
 
-                    fecha_hora, eventNextDay = procesar_hora_evento(fecha_actual, hora_event, +5, eventNextDay)
+                    fecha_hora, eventNextDay = procesar_hora_evento(fecha_actual, hora_event, +5, "RojaTv")
 
                     Insert_Update_Events_Unified(
                         proveedor="RojaTv",
@@ -2950,7 +3100,7 @@ def procesar_Platin():
                         if url_name_pairs is None or not url_name_pairs:
                             continue
 
-                        fecha_hora, eventNextDay = procesar_hora_evento(fecha_actual, hora_event, 0, eventNextDay)
+                        fecha_hora, eventNextDay = procesar_hora_evento(fecha_actual, hora_event, 0, "Platin")
                         # print(f"fecha_hora1: {fecha_hora} | name_event: {name_event}")
                         # continue                         
 
@@ -3113,7 +3263,7 @@ def procesar_Platin():
                                         #         break  # Salimos del bucle si encontramos el evento
 
                                         name_event = capitalize_words(name_event)
-                                        fecha_hora, eventNextDay = procesar_hora_evento(fecha_actual, hora_event, 0, eventNextDay)
+                                        fecha_hora, eventNextDay = procesar_hora_evento(fecha_actual, hora_event, 0, "Platin")
                                         # print(f"fecha_hora: {fecha_hora} | hora_event: {hora_event} | name_event: {name_event} | eventNextDay: {eventNextDay}")
                                         # continue                                        
 
@@ -3264,9 +3414,8 @@ def procesar_DaddyLivehd():
 
                             name_event = name_event.replace("vs.", "Vs").strip()
 
-
                             if channels_data:
-                                fecha_hora, eventNextDay = procesar_hora_evento(fecha_actual, hora_event, 0, eventNextDay)
+                                fecha_hora, eventNextDay = procesar_hora_evento(fecha_actual, hora_event, 0, "DLHD")
 
                             Insert_Update_Events_Unified(
                                 proveedor="DLHD",
@@ -3288,6 +3437,8 @@ def procesar_DaddyLivehd():
                             )
                             contar_reg += 1
 
+                            bool_estado_DaddyLivehd = False
+
                         except Exception as e:
                             manejar_error_mensajes(f"Error en procesar_DLHD 3: {e} | {event}", 1)
                             bool_estado_DaddyLivehd = False
@@ -3298,188 +3449,6 @@ def procesar_DaddyLivehd():
     except Exception as e:
         manejar_error_mensajes(f"Error en procesar_DLHD 4: {e}", 1)
         actualizar_estado_dealer(dealer_id=8, dealer_name="DLHD", estado=False)
-
-
-# def procesar_DaddyLivehd():
-#     manejar_error_mensajes(" ============================================= | Inicia procesar_DLHD | ============================================= ", 0)
-#     global eventNextDay
-#     global event_categoria
-#     global url_flag
-#     global jug_Local
-#     global logo_Local
-#     global jug_Visita
-#     global logo_Visita
-#     global channel_name
-#     global imagenIdiom
-#     global text_idiom
-#     global existeEvent
-#     global contador_registros
-#     global bool_estado_platin
-#     global foundDayOfWeek
-#     global currentDayOfWeek
-#     global bool_estado_DaddyLivehd
-#     try:        
-#         hora_event = None
-#         contar_reg = 0
-
-#         responseDaddyLivehd = obtenerResponseSelenium(urlDaddyLivehd)     
-#         page_source = responseDaddyLivehd
-#         # if debuguear == 1:
-#         #     with open('DLHD.html', 'w', encoding='utf-8') as file:
-#         #         file.write(page_source)
-        
-#         soup = BeautifulSoup(page_source, 'html.parser')
-
-#         fecha_pag = soup.find('tr', class_='date-row')
-#         fecha_pag = fecha_pag.find('strong').get_text(strip=True)
-#         match = re.search(r'(\d{1,2})(?:st|nd|rd|th)?\s+(\w+)\s+(\d{4})', fecha_pag)
-#         dia, mes_texto, anio = match.groups()
-#         mes = month_str_to_num(mes_texto)
-#         dia = dia.zfill(2)  # Asegurar 2 dígitos
-#         fecha_pagina = f"{anio}{mes}{dia}"
-
-#         if fecha_pagina == fecha_actual:
-#             # Verificar si existe el botón que marca el fin de los eventos útiles
-#             boton_fin = soup.find('button', {'id': 'toggleExtraSchedule'})
-#             if boton_fin:
-#                 # Limitar el procesamiento solo a los elementos antes del botón
-#                 contenido_util = page_source.split(str(boton_fin))[0]
-#                 soup = BeautifulSoup(contenido_util, 'html.parser')
-
-
-#             categorias = soup.find_all('tr', class_='category-row')
-
-#             for categoria in categorias:
-#                 try:
-#                     if "TV Shows" in categoria.get_text():
-#                         continue  # Saltamos TV Shows
-                        
-#                     # Encontrar todos los eventos siguientes hasta la próxima categoría
-#                     elementos = []
-#                     siguiente_elemento = categoria.find_next_sibling('tr')
-                    
-#                     while siguiente_elemento and not ('category-row' in siguiente_elemento.get('class', [])):
-#                         elementos.append(siguiente_elemento)
-#                         siguiente_elemento = siguiente_elemento.find_next_sibling('tr')
-
-#                     # Recolectar todos los elementos de esta categoría
-#                     elementos = []
-#                     siguiente_elemento = categoria.find_next_sibling('tr')
-                    
-#                     while siguiente_elemento and not ('category-row' in siguiente_elemento.get('class', [])):
-#                         elementos.append(siguiente_elemento)
-#                         siguiente_elemento = siguiente_elemento.find_next_sibling('tr')
-
-#                     # Procesar elementos
-#                     idx = 0
-#                     while idx < len(elementos):
-#                         elemento_actual = elementos[idx]
-                        
-#                         try:
-#                             if 'event-row' in elemento_actual.get('class', []):
-#                                 # Procesar evento
-#                                 hora_tag = elemento_actual.find('div', class_='event-time')
-#                                 hora_event = hora_tag.get_text(strip=True) if hora_tag else None
-                                
-#                                 nombre_tag = elemento_actual.find('div', class_='event-info')
-#                                 if nombre_tag:
-#                                     nombre_completo = nombre_tag.get_text(strip=True)
-#                                     if " : " in nombre_completo:
-#                                         event_categoria, name_event = nombre_completo.split(" : ", 1)
-#                                     else:
-#                                         event_categoria = " "
-#                                         name_event = nombre_completo
-                                    
-#                                     # Procesar equipos
-#                                     jug_Local, jug_Visita = (None, None)
-#                                     if "vs" in name_event or "vs." in name_event:
-#                                         try:
-#                                             delimitador = "vs" if "vs" in name_event else "vs."
-#                                             partes = re.split(rf"\s*{re.escape(delimitador)}\s*", name_event)
-#                                             if len(partes) == 2:
-#                                                 jug_Local, jug_Visita = map(str.strip, partes)
-#                                         except Exception as e:
-#                                             manejar_error_mensajes(f"Error al dividir jugadores: {e}", 1)
-                                    
-#                                     name_event = name_event.replace("vs.", "Vs").strip()
-                                    
-#                                     # Procesar canales (siguiente elemento)
-#                                     channels_data = []
-#                                     if idx+1 < len(elementos) and 'channel-row' in elementos[idx+1].get('class', []):
-#                                         canales_tag = elementos[idx+1]
-#                                         enlaces = canales_tag.find_all('a', class_='channel-button-small')
-                                        
-#                                         for enlace in enlaces:
-#                                             url_inicial = enlace.get('href')
-#                                             nombre_canal = enlace.get_text(strip=True)
-#                                             nombre_canal_limpio = re.sub(r'\s*\([^)]*\)', '', nombre_canal)
-#                                             if '/bet.' in url_inicial:
-#                                                 continue
-                                            
-#                                             url_inicial = url_inicial.replace("/stream/", "/")
-
-#                                             # https://daddylive.mp/extra/stream-1237.php
-#                                             if '/extra/' in url_inicial:
-#                                                 continue
-                                                
-#                                             url_completa = f"https://daddylive.mp/embed{url_inicial}"
-                                            
-#                                             canal = {
-#                                                 'channel_name': nombre_canal_limpio,
-#                                                 'urlFinal': url_completa
-#                                             }
-#                                             channels_data.append(canal)
-
-#                                     if channels_data:
-#                                         fecha_hora, eventNextDay = procesar_hora_evento(fecha_actual, hora_event, 0, eventNextDay)
-#                                         # print(f"fecha_hora: {fecha_hora} | name_event: {name_event}")
-#                                         # for canal in channels_data:
-#                                         #     print(f"        channel_name: {canal['channel_name']} | urlFinal: {canal['urlFinal']}")
-                                        
-#                                         Insert_Update_Events_Unified(
-#                                             proveedor="DLHD",
-#                                             fecha_hora=fecha_hora,
-#                                             # hora_event=hora_event,
-#                                             event_categoria=event_categoria,
-#                                             name_event=name_event,
-#                                             url_flag=url_flag,
-#                                             jug_Local=jug_Local,
-#                                             logo_Local=logo_Local,
-#                                             jug_Visita=jug_Visita,
-#                                             logo_Visita=logo_Visita,
-#                                             imagenIdiom=imagenIdiom,
-#                                             channel_name=channel_name,
-#                                             text_idiom=text_idiom,
-#                                             urlFinal=None,
-#                                             existeEvent=existeEvent,
-#                                             elementos= channels_data
-#                                         )
-
-#                                         contar_reg += 1
-#                                         idx += 2  # Saltamos al siguiente evento (pasamos los canales)
-#                                     else:
-#                                         idx += 1  # No había canales, avanzamos
-#                                 else:
-#                                     idx += 1  # No había nombre de evento, avanzamos
-#                             else:
-#                                 idx += 1  # No era un evento, avanzamos
-
-#                         except Exception as e:
-#                             manejar_error_mensajes(f"Error procesando elemento {idx}: {e}", 1)
-#                             bool_estado_DaddyLivehd = False
-#                             idx += 1  # Asegurarnos de avanzar incluso si hay error
-
-#                 except Exception as e:
-#                     manejar_error_mensajes(f"Error en procesar_DLHD 3: {e} | {categoria}", 1)
-#                     bool_estado_DaddyLivehd = False
-#                     continue
-            
-#         manejar_error_mensajes(f"Add {contar_reg} for DLHD", 1)
-#         actualizar_estado_dealer(dealer_id=8, dealer_name="DLHD", estado=bool_estado_DaddyLivehd)
-#             # manejar_error_mensajes("Termina procesar_DaddyLivehd", 0)        
-#     except Exception as e:
-#         manejar_error_mensajes(f"Error en procesar_DLHD 4: {e}", 1)
-#         actualizar_estado_dealer(dealer_id=8, dealer_name="DLHD", estado=False)
 
 
 def procesar_LFJson():
@@ -3556,7 +3525,7 @@ def procesar_LFJson():
                 event_categoria = f"{country_name} {event_categoria}"
                 url_flag = f"{base_url_flag} {url_flag}"
                 url_flag = url_flag.replace(" ", "")      
-                fecha_hora, eventNextDay = procesar_hora_evento(fecha_actual, hora_event, +5, eventNextDay)
+                fecha_hora, eventNextDay = procesar_hora_evento(fecha_actual, hora_event, +5, "LFJson")
         
                 Insert_Update_Events_Unified(
                     proveedor="LFJson",
@@ -3598,14 +3567,14 @@ def procesar_LFJson():
 def obtener_eventos():
 
     # activaBases = 0
-    # activaLiveTV = 0
+    # activaLiveTV = 1
     # activaSportline = 0
     # activaDirectatvHDme = 0
-    # activaLibreF = 0
+    activaLibreF = 0
     # activaRojaTv = 0
     # activaPlatin = 0
     # activaLFJSON = 0
-    # activaDaddyLivehd = 0
+    # activaDaddyLivehd =0
     # activaRojaOn = 0
 
     # print(f"activaBases: {activaBases} | activaLiveTV: {activaLiveTV} | activaSportline: {activaSportline} | activaDirectatvHDme: {activaDirectatvHDme} | activaLibreF: {activaLibreF} | activaRojaTv: {activaRojaTv} | activaPlatin: {activaPlatin} | activaLFJSON: {activaLFJSON} | activaDaddyLivehd: {activaDaddyLivehd} | activaRojaOn: {activaRojaOn}")
